@@ -3,12 +3,14 @@ AIOps 智能运维接口
 """
 
 import json
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
+from app.agent.aiops.state import utc_now_iso
 from app.models.aiops import AIOpsRequest
 from app.services.aiops_service import AIOpsService
 
@@ -134,11 +136,19 @@ async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDepe
         SSE 事件流
     """
     session_id = request.session_id or "default"
+    incident_id = request.incident_id or str(uuid4())
+    trace_id = uuid4().hex
     logger.info(f"[会话 {session_id}] 收到 AIOps 诊断请求（流式）")
 
     async def event_generator():
+        last_sequence = 0
         try:
-            async for event in aiops_service.diagnose(session_id=session_id):
+            async for event in aiops_service.diagnose(
+                session_id=session_id,
+                incident_id=incident_id,
+                trace_id=trace_id,
+            ):
+                last_sequence = event.get("sequence", last_sequence)
                 # 发送事件
                 yield {
                     "event": "message",
@@ -158,8 +168,25 @@ async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDepe
                 "data": json.dumps({
                     "type": "error",
                     "stage": "exception",
-                    "message": f"诊断异常: {str(e)}"
+                    "message": f"诊断异常: {str(e)}",
+                    "incident_id": incident_id,
+                    "trace_id": trace_id,
+                    "sequence": last_sequence + 1,
+                    "timestamp": utc_now_iso(),
                 }, ensure_ascii=False)
             }
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/incidents/{incident_id}")
+async def get_incident(
+    incident_id: str,
+    aiops_service: AIOpsServiceDependency,
+) -> dict[str, Any]:
+    """Return the latest durable state for an incident."""
+
+    state = await aiops_service.get_incident(incident_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return state

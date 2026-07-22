@@ -14,6 +14,7 @@ class AIOpsRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "session_id": "session-123",
+                "incident_id": "incident-456",
             }
         }
     )
@@ -21,6 +22,12 @@ class AIOpsRequest(BaseModel):
     session_id: str | None = Field(
         default="default",
         description="会话ID，用于追踪诊断历史"
+    )
+    incident_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="故障ID，用作持久化工作流的唯一线程标识",
     )
 
 

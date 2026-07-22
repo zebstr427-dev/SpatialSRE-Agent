@@ -10,7 +10,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.agent.aiops.state import IncidentState, create_incident_state
+from app.agent.aiops.state import IncidentState, create_incident_state, utc_now_iso
 
 # 节点名称常量
 NODE_PLANNER = "planner"
@@ -101,7 +101,10 @@ class AIOpsService:
     async def execute(
         self,
         user_input: str,
-        session_id: str = "default"
+        session_id: str = "default",
+        *,
+        incident_id: str | None = None,
+        trace_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         执行 Plan-Execute-Replan 流程
@@ -113,16 +116,36 @@ class AIOpsService:
         Yields:
             Dict[str, Any]: 流式事件
         """
-        logger.info(f"[会话 {session_id}] 开始执行任务: {user_input}")
+        initial_state = create_incident_state(
+            user_input,
+            session_id=session_id,
+            incident_id=incident_id,
+            trace_id=trace_id,
+        )
+        resolved_incident_id = initial_state["incident_id"]
+        resolved_trace_id = initial_state["trace_id"]
+        sequence = 0
+
+        def enrich(event: dict[str, Any]) -> dict[str, Any]:
+            nonlocal sequence
+            sequence += 1
+            return {
+                **event,
+                "incident_id": resolved_incident_id,
+                "trace_id": resolved_trace_id,
+                "sequence": sequence,
+                "timestamp": utc_now_iso(),
+            }
+
+        logger.info(
+            f"[故障 {resolved_incident_id}] [会话 {session_id}] 开始执行任务: {user_input}"
+        )
 
         try:
-            # 初始化状态
-            initial_state = create_incident_state(user_input, session_id=session_id)
-
             # 流式执行工作流
             config_dict = {
                 "configurable": {
-                    "thread_id": session_id
+                    "thread_id": resolved_incident_id
                 }
             }
 
@@ -137,16 +160,16 @@ class AIOpsService:
 
                     # 根据节点类型生成不同的事件
                     if node_name == NODE_PLANNER:
-                        yield self._format_planner_event(node_output)
+                        yield enrich(self._format_planner_event(node_output))
 
                     elif node_name == NODE_EXECUTOR:
-                        yield self._format_executor_event(node_output)
+                        yield enrich(self._format_executor_event(node_output))
 
                     elif node_name == NODE_REPLANNER:
-                        yield self._format_replanner_event(node_output)
+                        yield enrich(self._format_replanner_event(node_output))
 
             # 获取最终状态
-            final_state = self.graph.get_state(config_dict)
+            final_state = await self.graph.aget_state(config_dict)
             final_response = ""
 
             # 安全地获取响应（处理 values 可能为 None 的情况）
@@ -154,26 +177,39 @@ class AIOpsService:
                 final_response = final_state.values.get("response", "")
 
             # 发送完成事件
-            yield {
+            yield enrich({
                 "type": "complete",
                 "stage": "complete",
                 "message": "任务执行完成",
                 "response": final_response
-            }
+            })
 
-            logger.info(f"[会话 {session_id}] 任务执行完成")
+            logger.info(f"[故障 {resolved_incident_id}] 任务执行完成")
 
         except Exception as e:
-            logger.error(f"[会话 {session_id}] 任务执行失败: {e}", exc_info=True)
-            yield {
+            logger.error(f"[故障 {resolved_incident_id}] 任务执行失败: {e}", exc_info=True)
+            yield enrich({
                 "type": "error",
                 "stage": "error",
                 "message": f"任务执行出错: {str(e)}"
-            }
+            })
+
+    async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
+        """Load the latest persisted state for one incident."""
+
+        snapshot = await self.graph.aget_state(
+            {"configurable": {"thread_id": incident_id}}
+        )
+        if not snapshot.values:
+            return None
+        return dict(snapshot.values)
 
     async def diagnose(
         self,
-        session_id: str = "default"
+        session_id: str = "default",
+        *,
+        incident_id: str | None = None,
+        trace_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         AIOps 诊断接口（兼容旧接口）
@@ -260,11 +296,17 @@ class AIOpsService:
                 - 所有内容必须基于工具查询的真实数据，严禁编造
                 - 如果某个步骤失败，在结论中如实说明，不要跳过""")
 
-        async for event in self.execute(aiops_task, session_id):
+        async for event in self.execute(
+            aiops_task,
+            session_id,
+            incident_id=incident_id,
+            trace_id=trace_id,
+        ):
             # 转换事件格式以兼容旧的 API
             if event.get("type") == "complete":
                 # 将 response 包装为 diagnosis 格式
                 yield {
+                    **event,
                     "type": "complete",
                     "stage": "diagnosis_complete",
                     "message": "诊断流程完成",
