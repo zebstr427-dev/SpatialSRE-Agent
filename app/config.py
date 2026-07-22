@@ -3,7 +3,9 @@
 使用 Pydantic Settings 实现类型安全的配置管理
 """
 
-from typing import Dict, Any
+from typing import Any
+
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +36,15 @@ class Settings(BaseSettings):
     milvus_port: int = 19530
     milvus_timeout: int = 10000  # 毫秒
 
+    # LangGraph PostgreSQL checkpoint store
+    checkpoint_database_url: SecretStr = SecretStr(
+        "postgresql://oncall_agent:oncall_dev@127.0.0.1:5433/oncall_agent"
+    )
+    checkpoint_pool_min_size: int = Field(default=1, ge=1)
+    checkpoint_pool_max_size: int = Field(default=10, ge=1)
+    checkpoint_pool_timeout: float = Field(default=10.0, gt=0)
+    checkpoint_auto_setup: bool = True
+
     # RAG 配置
     rag_top_k: int = 3
     rag_model: str = "qwen-max"  # 使用快速响应模型，不带扩展思考
@@ -54,7 +65,7 @@ class Settings(BaseSettings):
     prometheus_request_timeout: float = 10.0
 
     @property
-    def mcp_servers(self) -> Dict[str, Dict[str, Any]]:
+    def mcp_servers(self) -> dict[str, dict[str, Any]]:
         """获取完整的 MCP 服务器配置"""
         return {
             "cls": {
@@ -66,6 +77,15 @@ class Settings(BaseSettings):
                 "url": self.mcp_monitor_url,
             }
         }
+
+    @model_validator(mode="after")
+    def validate_checkpoint_pool_sizes(self) -> "Settings":
+        if self.checkpoint_pool_max_size < self.checkpoint_pool_min_size:
+            raise ValueError(
+                "checkpoint_pool_max_size must be greater than or equal to "
+                "checkpoint_pool_min_size"
+            )
+        return self
 
 
 # 全局配置实例

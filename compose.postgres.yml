@@ -1,0 +1,30 @@
+name: oncall-agent-checkpoint
+
+services:
+  postgres:
+    image: ${CHECKPOINT_POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:18.4-alpine}
+    container_name: oncall-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${CHECKPOINT_POSTGRES_USER:-oncall_agent}
+      POSTGRES_PASSWORD: ${CHECKPOINT_POSTGRES_PASSWORD:-oncall_dev}
+      POSTGRES_DB: ${CHECKPOINT_POSTGRES_DB:-oncall_agent}
+    ports:
+      - "127.0.0.1:${CHECKPOINT_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - checkpoint_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  checkpoint_postgres_data:
+    name: oncall-postgres-data
