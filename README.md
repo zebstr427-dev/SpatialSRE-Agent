@@ -2,7 +2,7 @@
 
 > 企业级智能对话和运维助手，支持 RAG 知识库问答和 AIOps 智能诊断
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11--3.13-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
 [![LangChain](https://img.shields.io/badge/LangChain-latest-orange.svg)](https://www.langchain.com/)
 
@@ -11,6 +11,7 @@
 - 🤖 **智能对话** - LangChain 多轮对话 + 流式输出
 - 📚 **RAG 问答** - 向量检索增强，支持文档上传、自动建立向量索引、自动更新知识库
 - 🔧 **AIOps 诊断** - Plan-Execute-Replan 自动故障诊断和根因分析
+- 💾 **Durable Runtime** - PostgreSQL checkpoint、故障状态查询和跨进程恢复
 - 🌐 **Web 界面** - 现代化 UI，支持多种对话模式：快速问答/流式对话
 - 🔌 **MCP 集成** - 日志查询和监控数据工具接入
 
@@ -19,7 +20,10 @@
 - **框架**: FastAPI + LangChain + LangGraph
 - **LLM**: 阿里云 DashScope (通义千问)
 - **向量库**: Milvus
+- **Agent 状态存储**: PostgreSQL 18 + LangGraph Postgres Checkpointer
 - **工具协议**: MCP (Model Context Protocol)
+
+PostgreSQL Durable Runtime 的实现原理、复现命令和面试问答见 [教学文档](docs/learning/README.md)。
 
 ## 🚀 快速开始
 
