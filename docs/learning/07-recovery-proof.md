@@ -49,7 +49,7 @@ docker compose -f compose.postgres.yml up -d
 .\.venv\Scripts\pytest.exe -q
 ```
 
-预期为 `28 passed`。
+预期为 `31 passed`。
 
 ## 常见错误
 

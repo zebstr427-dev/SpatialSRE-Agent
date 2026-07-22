@@ -44,7 +44,7 @@ $changedPython = git diff --name-only 4d2a903..HEAD -- "*.py"
 .\.venv\Scripts\python.exe -m compileall -q app tests
 ```
 
-完整测试应为 `28 passed`，其中 PostgreSQL 集成测试应为 `2 passed`。
+完整测试应为 `31 passed`，其中 PostgreSQL 集成测试应为 `2 passed`。
 
 ## 已知基线技术债
 
