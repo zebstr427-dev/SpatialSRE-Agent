@@ -1,24 +1,107 @@
-"""
-通用 Plan-Execute-Replan 状态定义
-基于 LangGraph 官方教程实现
-"""
+"""Typed, serializable state for the durable AIOps workflow."""
 
-from typing import List, TypedDict, Annotated
 import operator
+from datetime import UTC, datetime
+from typing import Annotated, Literal, NotRequired, TypedDict
+from uuid import uuid4
+
+IncidentSeverity = Literal["critical", "high", "medium", "low", "unknown"]
+IncidentStatus = Literal["pending", "running", "completed", "failed"]
+StepStatus = Literal["succeeded", "failed"]
+EvidenceSourceType = Literal["metric", "log", "knowledge", "change", "tool"]
 
 
-class PlanExecuteState(TypedDict):
-    """Plan-Execute-Replan 状态"""
-    
-    # 用户输入（任务描述）
+class ExecutedStep(TypedDict):
+    """One completed execution step stored in checkpoint history."""
+
+    step: str
+    result: str
+    status: StepStatus
+    started_at: str
+    finished_at: str
+
+
+class EvidenceRecord(TypedDict):
+    """A traceable fact collected while diagnosing an incident."""
+
+    evidence_id: str
+    source_type: EvidenceSourceType
+    source: str
+    content: str
+    collected_at: str
+    tool_call_id: NotRequired[str]
+
+
+class IncidentState(TypedDict):
+    """Shared state persisted after each LangGraph superstep."""
+
     input: str
-    
-    # 执行计划（步骤列表）
-    plan: List[str]
-    
-    # 已执行的步骤历史
-    # 使用 operator.add 实现追加式更新（而非覆盖）
-    past_steps: Annotated[List[tuple], operator.add]
-    
-    # 最终响应/报告
+    incident_id: str
+    trace_id: str
+    session_id: str
+    severity: IncidentSeverity
+    plan: list[str]
+    past_steps: Annotated[list[ExecutedStep], operator.add]
+    evidence: Annotated[list[EvidenceRecord], operator.add]
     response: str
+    status: IncidentStatus
+    error: str | None
+    created_at: str
+    updated_at: str
+
+
+def utc_now_iso() -> str:
+    """Return an RFC 3339-compatible UTC timestamp."""
+
+    return datetime.now(UTC).isoformat()
+
+
+def create_executed_step(
+    step: str,
+    result: str,
+    *,
+    status: StepStatus,
+    started_at: str,
+    finished_at: str | None = None,
+) -> ExecutedStep:
+    """Build a structured execution record for checkpoint history."""
+
+    return {
+        "step": step,
+        "result": result,
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at or utc_now_iso(),
+    }
+
+
+def create_incident_state(
+    user_input: str,
+    *,
+    session_id: str = "default",
+    incident_id: str | None = None,
+    trace_id: str | None = None,
+    severity: IncidentSeverity = "unknown",
+) -> IncidentState:
+    """Create a complete initial state using checkpoint-safe primitive values."""
+
+    timestamp = utc_now_iso()
+    return {
+        "input": user_input,
+        "incident_id": incident_id or str(uuid4()),
+        "trace_id": trace_id or uuid4().hex,
+        "session_id": session_id,
+        "severity": severity,
+        "plan": [],
+        "past_steps": [],
+        "evidence": [],
+        "response": "",
+        "status": "pending",
+        "error": None,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }
+
+
+# Temporary compatibility alias for callers migrated in later lessons.
+PlanExecuteState = IncidentState

@@ -3,22 +3,24 @@ Executor 节点：执行单个步骤
 基于 LangGraph 官方教程实现
 """
 
-from typing import Dict, Any
+from typing import Any
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_qwq import ChatQwen
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
+from app.agent.mcp_client import get_mcp_client_with_retry
 from app.config import config
 from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
-from app.agent.mcp_client import get_mcp_client_with_retry
-from .state import PlanExecuteState
+
+from .state import IncidentState, create_executed_step, utc_now_iso
 
 
-async def executor(state: PlanExecuteState) -> Dict[str, Any]:
+async def executor(state: IncidentState) -> dict[str, Any]:
     """
     执行节点：执行计划中的下一个步骤
-    
+
     使用 LangGraph 的 ToolNode 自动处理工具调用
     """
     logger.info("=== Executor：执行步骤 ===")
@@ -32,6 +34,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
 
     # 取出第一个步骤
     task = plan[0]
+    started_at = utc_now_iso()
     logger.info(f"当前任务: {task}")
 
     try:
@@ -82,31 +85,49 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
         # 第二步：如果有工具调用，执行工具
         if hasattr(llm_response, "tool_calls") and llm_response.tool_calls:
             logger.info(f"检测到 {len(llm_response.tool_calls)} 个工具调用")
-            
+
             # 使用 ToolNode 自动执行工具
             messages.append(llm_response)
             tool_messages = await tool_node.ainvoke({"messages": messages})
-            
+
             # 第三步：将工具结果返回给 LLM 生成最终答案
             messages.extend(tool_messages["messages"])
             final_response = await llm_with_tools.ainvoke(messages)
-            result = final_response.content if hasattr(final_response, 'content') else str(final_response)
+            result = final_response.content if hasattr(final_response, "content") else str(final_response)
         else:
             # 没有工具调用，直接使用 LLM 的输出
             logger.info("LLM 未调用工具，直接返回结果")
-            result = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            result = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
+
+        result = str(result)
 
         logger.info(f"步骤执行完成，结果长度: {len(result)}")
 
         # 返回更新：移除已执行的步骤，添加执行历史
         return {
             "plan": plan[1:],  # 移除第一个步骤
-            "past_steps": [(task, result)],  # 使用 operator.add 追加
+            "past_steps": [
+                create_executed_step(
+                    task,
+                    result,
+                    status="succeeded",
+                    started_at=started_at,
+                )
+            ],
+            "updated_at": utc_now_iso(),
         }
 
     except Exception as e:
         logger.error(f"执行步骤失败: {e}", exc_info=True)
         return {
             "plan": plan[1:],
-            "past_steps": [(task, f"执行失败: {str(e)}")],
+            "past_steps": [
+                create_executed_step(
+                    task,
+                    f"执行失败: {e}",
+                    status="failed",
+                    started_at=started_at,
+                )
+            ],
+            "updated_at": utc_now_iso(),
         }

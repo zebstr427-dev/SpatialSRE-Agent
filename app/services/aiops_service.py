@@ -3,13 +3,17 @@
 基于 LangGraph 官方教程实现
 """
 
-from typing import AsyncGenerator, Dict, Any
-from langgraph.graph import StateGraph, END
+from collections.abc import AsyncGenerator
+from typing import Any
+
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.agent.aiops import PlanExecuteState, planner, executor, replanner
-
+from app.agent.aiops.executor import executor
+from app.agent.aiops.planner import planner
+from app.agent.aiops.replanner import replanner
+from app.agent.aiops.state import IncidentState, create_incident_state
 
 # 节点名称常量
 NODE_PLANNER = "planner"
@@ -31,7 +35,7 @@ class AIOpsService:
         logger.info("构建工作流图...")
 
         # 创建状态图
-        workflow = StateGraph(PlanExecuteState)
+        workflow = StateGraph(IncidentState)
 
         # 添加节点
         workflow.add_node(NODE_PLANNER, planner)      # 制定计划
@@ -46,7 +50,7 @@ class AIOpsService:
         workflow.add_edge(NODE_EXECUTOR, NODE_REPLANNER)   # executor -> replanner
 
         # replanner 的条件边
-        def should_continue(state: PlanExecuteState) -> str:
+        def should_continue(state: IncidentState) -> str:
             """判断是否继续执行"""
             # 如果已经生成了最终响应，结束
             if state.get("response"):
@@ -82,7 +86,7 @@ class AIOpsService:
         self,
         user_input: str,
         session_id: str = "default"
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         执行 Plan-Execute-Replan 流程
 
@@ -97,12 +101,7 @@ class AIOpsService:
 
         try:
             # 初始化状态
-            initial_state: PlanExecuteState = {
-                "input": user_input,
-                "plan": [],
-                "past_steps": [],
-                "response": ""
-            }
+            initial_state = create_incident_state(user_input, session_id=session_id)
 
             # 流式执行工作流
             config_dict = {
@@ -159,7 +158,7 @@ class AIOpsService:
     async def diagnose(
         self,
         session_id: str = "default"
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         AIOps 诊断接口（兼容旧接口）
 
@@ -261,7 +260,7 @@ class AIOpsService:
             else:
                 yield event
 
-    def _format_planner_event(self, state: Dict | None) -> Dict:
+    def _format_planner_event(self, state: dict | None) -> dict:
         """格式化 Planner 节点事件"""
         if not state:
             return {
@@ -279,7 +278,7 @@ class AIOpsService:
             "plan": plan
         }
 
-    def _format_executor_event(self, state: Dict | None) -> Dict:
+    def _format_executor_event(self, state: dict | None) -> dict:
         """格式化 Executor 节点事件"""
         if not state:
             return {
@@ -292,7 +291,7 @@ class AIOpsService:
         past_steps = state.get("past_steps", [])
 
         if past_steps:
-            last_step, _ = past_steps[-1]
+            last_step = past_steps[-1]["step"]
             return {
                 "type": "step_complete",
                 "stage": "step_executed",
@@ -307,7 +306,7 @@ class AIOpsService:
                 "message": "开始执行步骤"
             }
 
-    def _format_replanner_event(self, state: Dict | None) -> Dict:
+    def _format_replanner_event(self, state: dict | None) -> dict:
         """格式化 Replanner 节点事件"""
         if not state:
             return {

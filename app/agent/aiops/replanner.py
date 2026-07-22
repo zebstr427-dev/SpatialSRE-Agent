@@ -4,16 +4,19 @@ Replanner 节点：重新规划或生成最终响应
 """
 
 from textwrap import dedent
-from typing import Dict, Any, List
+from typing import Any
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_qwq import ChatQwen
-from pydantic import BaseModel, Field
 from loguru import logger
+from pydantic import BaseModel, Field
 
+from app.agent.mcp_client import get_mcp_client_with_retry
 from app.config import config
 from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
-from app.agent.mcp_client import get_mcp_client_with_retry
-from .state import PlanExecuteState
+
+from .history import format_steps_for_prompt, format_steps_markdown
+from .state import ExecutedStep, IncidentState, utc_now_iso
 from .utils import format_tools_description
 
 
@@ -31,7 +34,7 @@ class Act(BaseModel):
         - 'respond': 计划已完成且信息充足，生成最终响应"""
     )
     # action 为 'replan' 时，新的步骤列表（会替换当前剩余计划）
-    new_steps: List[str] = Field(
+    new_steps: list[str] = Field(
         default_factory=list,
         description="新的步骤列表（如果 action 是 'replan'，这些步骤会替换剩余计划）"
     )
@@ -79,7 +82,7 @@ replanner_prompt = ChatPromptTemplate.from_messages(
                 - 剩余步骤是否真的"必需"？
                 - 已执行步骤数是否过多（>= 5）？如果是，立即 respond
 
-                **决策优先级口诀：** 
+                **决策优先级口诀：**
                 "优先结束 > 保持不变 > 调整计划"
                 "信息足够就响应，不要追求完美"
             """).strip(),
@@ -108,7 +111,7 @@ response_prompt = ChatPromptTemplate.from_messages(
 )
 
 
-async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
+async def replanner(state: IncidentState) -> dict[str, Any]:
     """
     重新规划节点：决定是继续、调整计划还是生成最终响应
 
@@ -164,10 +167,7 @@ async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
     )
 
     # 格式化已执行的步骤
-    steps_summary = "\n".join([
-        f"步骤: {step}\n结果: {result[:300]}..."
-        for step, result in past_steps
-    ])
+    steps_summary = format_steps_for_prompt(past_steps)
 
     # 如果还有剩余计划，进行决策
     if plan:
@@ -211,16 +211,16 @@ async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
                         f"强制截断为 {len(plan)} 个步骤"
                     )
                     new_steps = new_steps[:len(plan)]
-                
+
                 # ⚠️ 二次检查：如果已执行步骤 >= 5，禁止 replan
                 if len(past_steps) >= 5:
                     logger.warning(f"已执行 {len(past_steps)} 个步骤，禁止重新规划，强制生成响应")
                     return await _generate_response(state, llm)
-                
+
                 logger.info(f"决定调整计划，新步骤数量: {len(new_steps)}")
                 if new_steps:
                     # 替换剩余计划
-                    return {"plan": new_steps}
+                    return {"plan": new_steps, "updated_at": utc_now_iso()}
                 else:
                     logger.warning("replan 但未提供新步骤，继续执行原计划")
                     return {}
@@ -239,7 +239,7 @@ async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
         return await _generate_response(state, llm)
 
 
-async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str, Any]:
+async def _generate_response(state: IncidentState, llm: ChatQwen) -> dict[str, Any]:
     """生成最终响应"""
     logger.info("生成最终响应...")
 
@@ -247,10 +247,7 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
     past_steps = state.get("past_steps", [])
 
     # 格式化执行历史
-    execution_history = "\n\n".join([
-        f"### 步骤: {step}\n**结果:**\n{result}"
-        for step, result in past_steps
-    ])
+    execution_history = format_steps_markdown(past_steps)
 
     response_gen = response_prompt | llm.with_structured_output(Response)
 
@@ -272,7 +269,12 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
 
         logger.info(f"最终响应生成完成，长度: {len(final_response)}")
 
-        return {"response": final_response}
+        return {
+            "response": final_response,
+            "status": "completed",
+            "error": None,
+            "updated_at": utc_now_iso(),
+        }
 
     except Exception as e:
         logger.error(f"生成响应失败: {e}")
@@ -288,16 +290,23 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
 ## 说明
 由于系统异常，无法生成完整响应。以上是已收集的信息。
 """
-        return {"response": fallback_response}
+        return {
+            "response": fallback_response,
+            "status": "completed",
+            "error": "final response generation failed",
+            "updated_at": utc_now_iso(),
+        }
 
 
-def _format_simple_steps(past_steps: list) -> str:
+def _format_simple_steps(past_steps: list[ExecutedStep]) -> str:
     """格式化步骤列表（简单版）"""
     if not past_steps:
         return "无"
 
     formatted = []
-    for i, (step, result) in enumerate(past_steps, 1):
+    for i, step_record in enumerate(past_steps, 1):
+        step = step_record["step"]
+        result = step_record["result"]
         result_preview = result[:200] + "..." if len(result) > 200 else result
         formatted.append(f"{i}. **{step}**\n   {result_preview}\n")
 
