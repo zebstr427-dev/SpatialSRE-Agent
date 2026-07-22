@@ -1,9 +1,15 @@
 from dataclasses import dataclass
 
+import pytest
 from psycopg.rows import dict_row
 
 from app.config import Settings
-from app.core.checkpoint import build_checkpoint_serializer, create_checkpoint_pool
+from app.core import checkpoint
+from app.core.checkpoint import (
+    build_checkpoint_serializer,
+    create_checkpoint_pool,
+    open_checkpoint_runtime,
+)
 
 
 @dataclass
@@ -37,3 +43,27 @@ def test_checkpoint_pool_uses_langgraph_required_connection_options() -> None:
     assert pool.kwargs["autocommit"] is True
     assert pool.kwargs["prepare_threshold"] == 0
     assert pool.kwargs["row_factory"] is dict_row
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_startup_failure_is_propagated_without_memory_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingPool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def open(self, *, wait: bool, timeout: float) -> None:
+            raise ConnectionError("checkpoint database unavailable")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    pool = FailingPool()
+    monkeypatch.setattr(checkpoint, "create_checkpoint_pool", lambda _settings: pool)
+
+    with pytest.raises(ConnectionError, match="checkpoint database unavailable"):
+        async with open_checkpoint_runtime(Settings(_env_file=None)):
+            pytest.fail("runtime must not fall back to an in-memory checkpointer")
+
+    assert pool.closed
