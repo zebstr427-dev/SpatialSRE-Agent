@@ -3,30 +3,46 @@
 基于 LangGraph 官方教程实现
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.agent.aiops.executor import executor
-from app.agent.aiops.planner import planner
-from app.agent.aiops.replanner import replanner
 from app.agent.aiops.state import IncidentState, create_incident_state
 
 # 节点名称常量
 NODE_PLANNER = "planner"
 NODE_EXECUTOR = "executor"
 NODE_REPLANNER = "replanner"
+NodeCallable = Callable[[IncidentState], Awaitable[dict[str, Any]]]
 
 
 class AIOpsService:
     """通用 Plan-Execute-Replan 服务"""
 
-    def __init__(self):
-        """初始化服务"""
-        self.checkpointer = MemorySaver()
+    def __init__(
+        self,
+        checkpointer: BaseCheckpointSaver,
+        *,
+        planner_node: NodeCallable | None = None,
+        executor_node: NodeCallable | None = None,
+        replanner_node: NodeCallable | None = None,
+    ):
+        """Initialize the graph with caller-owned persistence and injectable nodes."""
+
+        if planner_node is None:
+            from app.agent.aiops.planner import planner as planner_node
+        if executor_node is None:
+            from app.agent.aiops.executor import executor as executor_node
+        if replanner_node is None:
+            from app.agent.aiops.replanner import replanner as replanner_node
+
+        self.checkpointer = checkpointer
+        self.planner_node = planner_node
+        self.executor_node = executor_node
+        self.replanner_node = replanner_node
         self.graph = self._build_graph()
         logger.info("Plan-Execute-Replan Service 初始化完成")
 
@@ -38,9 +54,9 @@ class AIOpsService:
         workflow = StateGraph(IncidentState)
 
         # 添加节点
-        workflow.add_node(NODE_PLANNER, planner)      # 制定计划
-        workflow.add_node(NODE_EXECUTOR, executor)  # 执行步骤
-        workflow.add_node(NODE_REPLANNER, replanner)  # 重新规划
+        workflow.add_node(NODE_PLANNER, self.planner_node)  # 制定计划
+        workflow.add_node(NODE_EXECUTOR, self.executor_node)  # 执行步骤
+        workflow.add_node(NODE_REPLANNER, self.replanner_node)  # 重新规划
 
         # 设置入口点
         workflow.set_entry_point(NODE_PLANNER)
@@ -335,6 +351,3 @@ class AIOpsService:
                 "remaining_steps": len(plan)
             }
 
-
-# 全局单例
-aiops_service = AIOpsService()

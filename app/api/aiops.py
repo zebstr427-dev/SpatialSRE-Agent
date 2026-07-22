@@ -3,18 +3,30 @@ AIOps 智能运维接口
 """
 
 import json
-from fastapi import APIRouter
-from sse_starlette.sse import EventSourceResponse
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
+from sse_starlette.sse import EventSourceResponse
 
 from app.models.aiops import AIOpsRequest
-from app.services.aiops_service import aiops_service
+from app.services.aiops_service import AIOpsService
 
 router = APIRouter()
 
 
+def get_aiops_service(request: Request) -> AIOpsService:
+    service = getattr(request.app.state, "aiops_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="AIOps runtime is not initialized")
+    return service
+
+
+AIOpsServiceDependency = Annotated[AIOpsService, Depends(get_aiops_service)]
+
+
 @router.post("/aiops")
-async def diagnose_stream(request: AIOpsRequest):
+async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDependency):
     """
     AIOps 故障诊断接口（流式 SSE）
 
