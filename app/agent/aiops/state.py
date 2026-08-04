@@ -1,5 +1,6 @@
 """Typed, serializable state for the durable AIOps workflow."""
 
+import json
 import operator
 from datetime import UTC, datetime
 from typing import Annotated, Literal, NotRequired, TypedDict
@@ -8,6 +9,7 @@ from uuid import uuid4
 IncidentSeverity = Literal["critical", "high", "medium", "low", "unknown"]
 IncidentStatus = Literal["pending", "running", "completed", "failed"]
 StepStatus = Literal["succeeded", "failed"]
+ToolCallStatus = Literal["succeeded", "failed"]
 EvidenceSourceType = Literal["metric", "log", "knowledge", "change", "tool"]
 
 
@@ -32,6 +34,19 @@ class EvidenceRecord(TypedDict):
     tool_call_id: NotRequired[str]
 
 
+class ToolCallAuditRecord(TypedDict):
+    """One completed tool invocation stored for audit and replay."""
+
+    tool_call_id: str
+    tool_name: str
+    step: str
+    arguments: dict[str, object]
+    result: str
+    status: ToolCallStatus
+    started_at: str
+    finished_at: str
+
+
 class IncidentState(TypedDict):
     """Shared state persisted after each LangGraph superstep."""
 
@@ -43,6 +58,7 @@ class IncidentState(TypedDict):
     plan: list[str]
     past_steps: Annotated[list[ExecutedStep], operator.add]
     evidence: Annotated[list[EvidenceRecord], operator.add]
+    tool_calls: Annotated[list[ToolCallAuditRecord], operator.add]
     response: str
     status: IncidentStatus
     error: str | None
@@ -54,6 +70,36 @@ def utc_now_iso() -> str:
     """Return an RFC 3339-compatible UTC timestamp."""
 
     return datetime.now(UTC).isoformat()
+
+
+def create_tool_call_audit_record(
+    tool_call_id: str,
+    tool_name: str,
+    step: str,
+    arguments: dict[str, object],
+    result: str,
+    *,
+    status: ToolCallStatus,
+    started_at: str,
+    finished_at: str | None = None,
+) -> ToolCallAuditRecord:
+    """Build a structured tool invocation record for checkpoint history."""
+
+    try:
+        json.dumps(arguments)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("arguments must be JSON-serializable") from exc
+
+    return {
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "step": step,
+        "arguments": arguments,
+        "result": result,
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at or utc_now_iso(),
+    }
 
 
 def create_executed_step(
@@ -95,6 +141,7 @@ def create_incident_state(
         "plan": [],
         "past_steps": [],
         "evidence": [],
+        "tool_calls": [],
         "response": "",
         "status": "pending",
         "error": None,

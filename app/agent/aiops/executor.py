@@ -5,64 +5,67 @@ Executor 节点：执行单个步骤
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_qwq import ChatQwen
-from langgraph.prebuilt import ToolNode
 from loguru import logger
 
-from app.agent.mcp_client import get_mcp_client_with_retry
+from app.agent.tool_gateway import ToolExecutionResult, create_tool_gateway
 from app.config import config
-from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
 
-from .state import IncidentState, create_executed_step, utc_now_iso
+from .state import (
+    IncidentState,
+    ToolCallAuditRecord,
+    create_executed_step,
+    create_tool_call_audit_record,
+    utc_now_iso,
+)
 
 
 async def executor(state: IncidentState) -> dict[str, Any]:
-    """
-    执行节点：执行计划中的下一个步骤
-
-    使用 LangGraph 的 ToolNode 自动处理工具调用
-    """
+    """Execute the next planned step through the Tool Gateway."""
     logger.info("=== Executor：执行步骤 ===")
 
     plan = state.get("plan", [])
-
-    # 如果计划为空，不执行
     if not plan:
         logger.info("计划为空，跳过执行")
         return {}
 
-    # 取出第一个步骤
     task = plan[0]
     started_at = utc_now_iso()
+    tool_call_audits: list[ToolCallAuditRecord] = []
     logger.info(f"当前任务: {task}")
 
+    def record_tool_call(result: ToolExecutionResult) -> None:
+        tool_call_audits.append(
+            create_tool_call_audit_record(
+                tool_call_id=result.tool_call_id,
+                tool_name=result.tool_name,
+                step=task,
+                arguments=dict(result.arguments),
+                result=result.output,
+                status=result.status,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+            )
+        )
+
     try:
-        # 获取本地工具
-        local_tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
+        gateway = await create_tool_gateway(
+            audit_hook=record_tool_call
+        )
+        all_tools = gateway.list_tools()
+        logger.info(f"Gateway 可用工具数量: {len(all_tools)}")
 
-        # 获取 MCP 工具
-        mcp_client = await get_mcp_client_with_retry()
-        mcp_tools = await mcp_client.get_tools()
-        logger.info(f"可用工具数量: 本地 {len(local_tools)} + MCP {len(mcp_tools)}")
-
-        # 合并所有工具
-        all_tools = local_tools + mcp_tools
-
-        # 创建 LLM（绑定工具）
         llm = ChatQwen(
             model=config.rag_model,
             api_key=config.dashscope_api_key,
-            temperature=0
+            temperature=0,
         )
         llm_with_tools = llm.bind_tools(all_tools)
 
-        # 创建工具节点（自动执行工具调用）
-        tool_node = ToolNode(all_tools)
-
-        # 构建消息（只包含当前步骤，避免原始任务干扰）
         messages = [
-            SystemMessage(content="""你是一个能力强大的助手，负责执行具体的任务步骤。
+            SystemMessage(
+                content="""你是一个能力强大的助手，负责执行具体的任务步骤。
 
 你可以使用各种工具来完成任务。对于每个步骤：
 1. 理解步骤的目标
@@ -74,38 +77,75 @@ async def executor(state: IncidentState) -> dict[str, Any]:
 - 如果工具调用失败，请说明失败原因
 - 不要编造数据，只返回实际获取的信息
 - 执行结果要清晰、准确
-- 专注于当前步骤，不要考虑其他任务"""),
-            HumanMessage(content=f"请执行以下任务: {task}")
+- 专注于当前步骤，不要考虑其他任务"""
+            ),
+            HumanMessage(content=f"请执行以下任务: {task}"),
         ]
 
-        # 第一步：LLM 决定是否调用工具
         llm_response = await llm_with_tools.ainvoke(messages)
         logger.info(f"LLM 响应类型: {type(llm_response)}")
 
-        # 第二步：如果有工具调用，执行工具
         if hasattr(llm_response, "tool_calls") and llm_response.tool_calls:
-            logger.info(f"检测到 {len(llm_response.tool_calls)} 个工具调用")
-
-            # 使用 ToolNode 自动执行工具
+            logger.info(
+                f"检测到 {len(llm_response.tool_calls)} 个工具调用"
+            )
             messages.append(llm_response)
-            tool_messages = await tool_node.ainvoke({"messages": messages})
+            tool_results: list[ToolExecutionResult] = []
 
-            # 第三步：将工具结果返回给 LLM 生成最终答案
-            messages.extend(tool_messages["messages"])
+            for tool_call in llm_response.tool_calls:
+                tool_results.append(
+                    await gateway.invoke(
+                        tool_call_id=str(tool_call["id"]),
+                        tool_name=str(tool_call["name"]),
+                        arguments=dict(tool_call.get("args", {})),
+                    )
+                )
+
+            failed_results = [
+                result
+                for result in tool_results
+                if result.status == "failed"
+            ]
+            if failed_results:
+                failure_summary = "; ".join(
+                    (
+                        f"{item.tool_name} [{item.error_code}]: "
+                        f"{item.error_message or item.output}"
+                    )
+                    for item in failed_results
+                )
+                raise RuntimeError(
+                    f"Tool execution failed: {failure_summary}"
+                )
+
+            messages.extend(
+                ToolMessage(
+                    content=item.output,
+                    tool_call_id=item.tool_call_id,
+                    name=item.tool_name,
+                    status="success",
+                )
+                for item in tool_results
+            )
             final_response = await llm_with_tools.ainvoke(messages)
-            result = final_response.content if hasattr(final_response, "content") else str(final_response)
+            result = (
+                final_response.content
+                if hasattr(final_response, "content")
+                else str(final_response)
+            )
         else:
-            # 没有工具调用，直接使用 LLM 的输出
             logger.info("LLM 未调用工具，直接返回结果")
-            result = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
+            result = (
+                llm_response.content
+                if hasattr(llm_response, "content")
+                else str(llm_response)
+            )
 
         result = str(result)
-
         logger.info(f"步骤执行完成，结果长度: {len(result)}")
 
-        # 返回更新：移除已执行的步骤，添加执行历史
         return {
-            "plan": plan[1:],  # 移除第一个步骤
+            "plan": plan[1:],
             "past_steps": [
                 create_executed_step(
                     task,
@@ -114,20 +154,22 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     started_at=started_at,
                 )
             ],
+            "tool_calls": tool_call_audits,
             "updated_at": utc_now_iso(),
         }
 
-    except Exception as e:
-        logger.error(f"执行步骤失败: {e}", exc_info=True)
+    except Exception as exc:
+        logger.error(f"执行步骤失败: {exc}", exc_info=True)
         return {
             "plan": plan[1:],
             "past_steps": [
                 create_executed_step(
                     task,
-                    f"执行失败: {e}",
+                    f"执行失败: {exc}",
                     status="failed",
                     started_at=started_at,
                 )
             ],
+            "tool_calls": tool_call_audits,
             "updated_at": utc_now_iso(),
         }

@@ -11,9 +11,8 @@ from langchain_qwq import ChatQwen
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app.agent.mcp_client import get_mcp_client_with_retry
+from app.agent.tool_gateway import create_tool_gateway
 from app.config import config
-from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
 
 from .history import format_steps_for_prompt, format_steps_markdown
 from .state import ExecutedStep, IncidentState, utc_now_iso
@@ -142,18 +141,9 @@ async def replanner(state: IncidentState) -> dict[str, Any]:
 
     # 获取可用工具列表
     try:
-        # 获取本地工具
-        local_tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
-
-        # 获取 MCP 工具
-        mcp_client = await get_mcp_client_with_retry()
-        mcp_tools = await mcp_client.get_tools()
-
-        # 合并所有工具
-        all_tools = local_tools + mcp_tools
-        logger.info(f"可用工具数量: 本地 {len(local_tools)} + MCP {len(mcp_tools)}")
-
-        # 格式化工具描述
+        gateway = await create_tool_gateway()
+        all_tools = gateway.list_tools()
+        logger.info(f"可用工具数量: {len(all_tools)}")
         tools_description = format_tools_description(all_tools)
     except Exception as e:
         logger.warning(f"获取工具列表失败: {e}")

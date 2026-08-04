@@ -1,0 +1,4 @@
+interface:
+  display_name: "OnCall Agent 企业实训教练"
+  short_description: "逐步指导并验收 OnCall Agent 企业级改造"
+  default_prompt: "使用 $upgrade-oncall-agent-by-doing 继续下一课企业级项目实训。"

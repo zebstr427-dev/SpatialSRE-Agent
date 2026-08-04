@@ -11,6 +11,7 @@ from app.agent.aiops.state import (
     IncidentState,
     create_executed_step,
     create_incident_state,
+    create_tool_call_audit_record,
     utc_now_iso,
 )
 from app.config import Settings
@@ -43,13 +44,27 @@ async def _planner(_state: IncidentState) -> dict[str, Any]:
 
 
 async def _executor(state: IncidentState) -> dict[str, Any]:
+    step = state["plan"][0]
     started_at = utc_now_iso()
+    result = f"evidence for {state['input']}"
+
     return {
         "plan": [],
         "past_steps": [
             create_executed_step(
-                state["plan"][0],
-                f"evidence for {state['input']}",
+                step,
+                result,
+                status="succeeded",
+                started_at=started_at,
+            )
+        ],
+        "tool_calls": [
+            create_tool_call_audit_record(
+                tool_call_id=f"call-{state['incident_id']}",
+                tool_name="collect_deterministic_evidence",
+                step=step,
+                arguments={"incident_id": state["incident_id"]},
+                result=result,
                 status="succeeded",
                 started_at=started_at,
             )
@@ -125,6 +140,25 @@ async def test_incidents_survive_pool_recreation_and_remain_isolated() -> None:
             assert state_a["session_id"] == state_b["session_id"] == "shared-session"
             assert state_a["incident_id"] != state_b["incident_id"]
             assert state_a["past_steps"][0]["result"] != state_b["past_steps"][0]["result"]
+
+            audit_a = state_a["tool_calls"][0]
+            audit_b = state_b["tool_calls"][0]
+
+            assert audit_a["tool_call_id"] == f"call-{incident_a}"
+            assert audit_b["tool_call_id"] == f"call-{incident_b}"
+            assert audit_a["tool_name"] == "collect_deterministic_evidence"
+            assert audit_b["tool_name"] == "collect_deterministic_evidence"
+            assert audit_a["step"] == "collect deterministic evidence"
+            assert audit_b["step"] == "collect deterministic evidence"
+            assert audit_a["arguments"] == {"incident_id": incident_a}
+            assert audit_b["arguments"] == {"incident_id": incident_b}
+            assert audit_a["result"] == "evidence for checkout latency"
+            assert audit_b["result"] == "evidence for payment errors"
+            assert audit_a["status"] == audit_b["status"] == "succeeded"
+            assert isinstance(audit_a["started_at"], str)
+            assert isinstance(audit_a["finished_at"], str)
+            assert isinstance(audit_b["started_at"], str)
+            assert isinstance(audit_b["finished_at"], str)
         finally:
             await second_runtime.saver.adelete_thread(incident_a)
             await second_runtime.saver.adelete_thread(incident_b)
