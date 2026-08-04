@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $repositoryPath = "C:\zyh\OnCallAgent\Python-super_biz_agent_py-release-2026-05-17\super_biz_agent_py-release-2026-05-17"
 $logPath = Join-Path $repositoryPath ".git\auto-sync.log"
@@ -9,7 +9,7 @@ function Write-SyncLog {
     param([string]$Message)
 
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -LiteralPath $logPath -Value "[$timestamp] $Message" -Encoding UTF8
+    Add-Content -LiteralPath $logPath -Value "[$timestamp] $Message" -Encoding UTF8 -ErrorAction Stop
 }
 
 $lockStream = $null
@@ -22,7 +22,7 @@ try {
         [System.IO.FileShare]::None
     )
 
-    Set-Location -LiteralPath $repositoryPath
+    Set-Location -LiteralPath $repositoryPath -ErrorAction Stop
 
     $branch = (& git branch --show-current).Trim()
     if ($branch -ne "main") {
