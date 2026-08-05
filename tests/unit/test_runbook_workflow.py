@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from app.agent.aiops.planner import planner
 from app.agent.aiops.state import create_incident_state
@@ -43,8 +44,8 @@ async def test_planner_falls_back_when_no_runbook_matches(
         raise RuntimeError("gateway offline")
 
     monkeypatch.setattr(
-        "app.agent.aiops.planner.retrieve_knowledge.ainvoke",
-        fail_retrieval,
+        "app.agent.aiops.planner.retrieve_knowledge",
+        SimpleNamespace(ainvoke=fail_retrieval),
     )
     monkeypatch.setattr(
         "app.agent.aiops.planner.create_tool_gateway",
