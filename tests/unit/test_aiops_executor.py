@@ -10,6 +10,8 @@ from langchain_core.tools import BaseTool, StructuredTool
 import app.agent.aiops.executor as executor_module
 from app.agent.aiops.state import create_incident_state
 from app.agent.tool_gateway import ToolGateway
+from app.agent.tool_risk import READ_ONLY_METADATA
+from app.agent.tool_risk import ToolRiskLevel, ToolRiskMetadata
 
 
 def _tool(name: str, coroutine) -> StructuredTool:
@@ -25,6 +27,7 @@ def _patch_runtime(
     *,
     first_response: AIMessage,
     tools: list[BaseTool],
+    risk_metadata: ToolRiskMetadata = READ_ONLY_METADATA,
 ) -> SimpleNamespace:
     llm = SimpleNamespace()
     llm.bind_tools = lambda _tools: llm
@@ -38,7 +41,11 @@ def _patch_runtime(
     async def create_gateway(*, audit_hook=None):
         gateway = ToolGateway(audit_hook=audit_hook)
         for tool in tools:
-            gateway.register(tool, source="local")
+            gateway.register(
+                tool,
+                source="local",
+                risk_metadata=risk_metadata,
+            )
         return gateway
 
     monkeypatch.setattr(executor_module, "ChatQwen", lambda **_kwargs: llm)
@@ -142,3 +149,40 @@ async def test_executor_preserves_gateway_failure_audit(
     )
     assert llm.ainvoke.await_count == 1
     json.dumps(result["tool_calls"])
+
+
+@pytest.mark.asyncio
+async def test_executor_requests_write_tools_in_dry_run_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[bool] = []
+
+    async def restart(service: str, simulate: bool) -> str:
+        received.append(simulate)
+        return "restart simulation complete"
+
+    _patch_runtime(
+        monkeypatch,
+        first_response=AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-restart",
+                    "name": "restart_service",
+                    "args": {"service": "checkout", "simulate": False},
+                }
+            ],
+        ),
+        tools=[_tool("restart_service", restart)],
+        risk_metadata=ToolRiskMetadata(
+            level=ToolRiskLevel.WRITE,
+            dry_run_argument="simulate",
+        ),
+    )
+
+    result = await executor_module.executor(
+        _state_with_plan("simulate checkout restart")
+    )
+
+    assert result["past_steps"][0]["status"] == "succeeded"
+    assert received == [True]

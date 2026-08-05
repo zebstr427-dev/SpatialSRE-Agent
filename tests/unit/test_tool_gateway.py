@@ -8,6 +8,12 @@ import pytest
 from langchain_core.tools import StructuredTool
 
 from app.agent.tool_gateway import ToolGateway, create_tool_gateway
+from app.agent.tool_risk import (
+    HIGH_RISK_METADATA,
+    READ_ONLY_METADATA,
+    ToolRiskLevel,
+    ToolRiskMetadata,
+)
 
 
 def _tool(
@@ -56,7 +62,11 @@ async def test_invoke_returns_standard_success_and_not_found_results() -> None:
         return f"echo:{value}"
 
     gateway = ToolGateway(audit_hook=audit)
-    gateway.register(_tool("echo", echo), source="local")
+    gateway.register(
+        _tool("echo", echo),
+        source="local",
+        risk_metadata=READ_ONLY_METADATA,
+    )
 
     succeeded = await gateway.invoke(
         tool_call_id="call-ok",
@@ -97,6 +107,7 @@ async def test_invoke_retries_within_the_registered_attempt_limit() -> None:
         _tool("flaky", flaky),
         source="local",
         max_attempts=2,
+        risk_metadata=READ_ONLY_METADATA,
     )
 
     result = await gateway.invoke(
@@ -124,12 +135,14 @@ async def test_invoke_returns_standard_execution_and_timeout_failures() -> None:
         _tool("broken", broken),
         source="mcp",
         max_attempts=2,
+        risk_metadata=READ_ONLY_METADATA,
     )
     gateway.register(
         _tool("slow", slow),
         source="mcp",
         timeout_seconds=0.01,
         max_attempts=2,
+        risk_metadata=READ_ONLY_METADATA,
     )
 
     broken_result = await gateway.invoke(
@@ -157,7 +170,11 @@ async def test_invoke_does_not_swallow_task_cancellation() -> None:
         raise asyncio.CancelledError
 
     gateway = ToolGateway()
-    gateway.register(_tool("cancelled", cancelled), source="local")
+    gateway.register(
+        _tool("cancelled", cancelled),
+        source="local",
+        risk_metadata=READ_ONLY_METADATA,
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await gateway.invoke(
@@ -165,3 +182,100 @@ async def test_invoke_does_not_swallow_task_cancellation() -> None:
             tool_name="cancelled",
             arguments={},
         )
+
+
+@pytest.mark.asyncio
+async def test_read_only_tool_executes_without_dry_run() -> None:
+    async def query(service: str) -> str:
+        return f"healthy:{service}"
+
+    gateway = ToolGateway()
+    gateway.register(
+        _tool("query_health", query),
+        source="local",
+        risk_metadata=READ_ONLY_METADATA,
+    )
+
+    result = await gateway.invoke(
+        tool_call_id="call-read",
+        tool_name="query_health",
+        arguments={"service": "checkout"},
+    )
+
+    assert result.status == "succeeded"
+    assert result.risk_level is ToolRiskLevel.READ_ONLY
+    assert result.dry_run is False
+
+
+@pytest.mark.asyncio
+async def test_write_tool_requires_and_forces_registered_dry_run_argument() -> None:
+    received: list[bool] = []
+
+    async def restart(service: str, simulate: bool) -> str:
+        received.append(simulate)
+        return f"restart:{service}:simulate={simulate}"
+
+    gateway = ToolGateway()
+    gateway.register(
+        _tool("restart_service", restart),
+        source="local",
+        risk_metadata=ToolRiskMetadata(
+            level=ToolRiskLevel.WRITE,
+            dry_run_argument="simulate",
+        ),
+    )
+
+    blocked = await gateway.invoke(
+        tool_call_id="call-write-blocked",
+        tool_name="restart_service",
+        arguments={"service": "checkout", "simulate": False},
+    )
+    simulated = await gateway.invoke(
+        tool_call_id="call-write-dry-run",
+        tool_name="restart_service",
+        arguments={"service": "checkout", "simulate": False},
+        dry_run=True,
+    )
+
+    assert blocked.error_code == "tool_dry_run_required"
+    assert blocked.attempts == 0
+    assert simulated.status == "succeeded"
+    assert simulated.arguments["simulate"] is True
+    assert simulated.dry_run is True
+    assert received == [True]
+
+
+@pytest.mark.asyncio
+async def test_high_risk_and_unclassified_registered_tools_fail_closed() -> None:
+    called: list[str] = []
+
+    async def mutate() -> str:
+        called.append("called")
+        return "mutated"
+
+    gateway = ToolGateway()
+    gateway.register(
+        _tool("delete_database", mutate),
+        source="local",
+        risk_metadata=HIGH_RISK_METADATA,
+    )
+    gateway.register(_tool("mystery_operation", mutate), source="mcp")
+
+    explicit = await gateway.invoke(
+        tool_call_id="call-high-risk",
+        tool_name="delete_database",
+        arguments={},
+        dry_run=True,
+    )
+    unclassified = await gateway.invoke(
+        tool_call_id="call-unknown-risk",
+        tool_name="mystery_operation",
+        arguments={},
+        dry_run=True,
+    )
+
+    assert explicit.error_code == "tool_risk_blocked"
+    assert unclassified.error_code == "tool_risk_blocked"
+    assert explicit.risk_level is ToolRiskLevel.HIGH_RISK
+    assert unclassified.risk_level is ToolRiskLevel.HIGH_RISK
+    assert called == []

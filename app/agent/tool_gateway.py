@@ -13,10 +13,18 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from loguru import logger
 
+from app.agent.tool_risk import (
+    ToolRiskLevel,
+    ToolRiskMetadata,
+    risk_metadata_for,
+)
+
 ToolSource = Literal["local", "mcp"]
 ToolExecutionStatus = Literal["succeeded", "failed"]
 ToolErrorCode = Literal[
     "tool_not_found",
+    "tool_dry_run_required",
+    "tool_risk_blocked",
     "tool_timeout",
     "tool_execution_failed",
 ]
@@ -29,6 +37,7 @@ class ToolRegistration:
     timeout_seconds: float
     max_attempts: int
     retry_delay_seconds: float
+    risk_metadata: ToolRiskMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +53,8 @@ class ToolExecutionResult:
     attempts: int
     started_at: str
     finished_at: str
+    risk_level: ToolRiskLevel
+    dry_run: bool
 
 
 ToolAuditHook = Callable[
@@ -73,6 +84,7 @@ class ToolGateway:
         timeout_seconds: float = 10.0,
         max_attempts: int = 1,
         retry_delay_seconds: float = 0.0,
+        risk_metadata: ToolRiskMetadata | None = None,
     ) -> None:
         if tool.name in self._registrations:
             raise ValueError(f"tool name already registered: {tool.name}")
@@ -89,6 +101,7 @@ class ToolGateway:
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
             retry_delay_seconds=retry_delay_seconds,
+            risk_metadata=risk_metadata or risk_metadata_for(tool.name),
         )
 
     def list_tools(self) -> list[BaseTool]:
@@ -109,6 +122,7 @@ class ToolGateway:
         tool_call_id: str,
         tool_name: str,
         arguments: dict[str, Any],
+        dry_run: bool = False,
     ) -> ToolExecutionResult:
         started_at = _utc_now_iso()
         safe_arguments = dict(arguments)
@@ -127,9 +141,54 @@ class ToolGateway:
                 attempts=0,
                 started_at=started_at,
                 finished_at=_utc_now_iso(),
+                risk_level=ToolRiskLevel.HIGH_RISK,
+                dry_run=False,
             )
             await self._emit_audit(result)
             return result
+
+        risk_metadata = registration.risk_metadata
+        if risk_metadata.level is ToolRiskLevel.HIGH_RISK:
+            message = f"Tool '{tool_name}' is blocked by its high-risk classification"
+            result = ToolExecutionResult(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                source=registration.source,
+                arguments=safe_arguments,
+                status="failed",
+                output=message,
+                error_code="tool_risk_blocked",
+                error_message=message,
+                attempts=0,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+                risk_level=risk_metadata.level,
+                dry_run=False,
+            )
+            await self._emit_audit(result)
+            return result
+
+        if risk_metadata.level is ToolRiskLevel.WRITE:
+            if not dry_run:
+                message = f"Tool '{tool_name}' requires dry-run execution"
+                result = ToolExecutionResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    source=registration.source,
+                    arguments=safe_arguments,
+                    status="failed",
+                    output=message,
+                    error_code="tool_dry_run_required",
+                    error_message=message,
+                    attempts=0,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    risk_level=risk_metadata.level,
+                    dry_run=False,
+                )
+                await self._emit_audit(result)
+                return result
+            safe_arguments[risk_metadata.dry_run_argument] = True
 
         try:
             json.dumps(safe_arguments)
@@ -150,6 +209,8 @@ class ToolGateway:
                 attempts=0,
                 started_at=started_at,
                 finished_at=_utc_now_iso(),
+                risk_level=risk_metadata.level,
+                dry_run=dry_run,
             )
             await self._emit_audit(result)
             return result
@@ -176,6 +237,8 @@ class ToolGateway:
                     attempts=attempts,
                     started_at=started_at,
                     finished_at=_utc_now_iso(),
+                    risk_level=risk_metadata.level,
+                    dry_run=dry_run,
                 )
                 await self._emit_audit(result)
                 return result
@@ -207,6 +270,8 @@ class ToolGateway:
             attempts=attempts,
             started_at=started_at,
             finished_at=_utc_now_iso(),
+            risk_level=risk_metadata.level,
+            dry_run=dry_run,
         )
         await self._emit_audit(result)
         return result

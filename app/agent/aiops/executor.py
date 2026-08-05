@@ -98,6 +98,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                         tool_call_id=str(tool_call["id"]),
                         tool_name=str(tool_call["name"]),
                         arguments=dict(tool_call.get("args", {})),
+                        dry_run=True,
                     )
                 )
 

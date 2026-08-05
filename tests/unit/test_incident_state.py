@@ -13,6 +13,8 @@ from app.agent.aiops.state import (
     create_executed_step,
     create_incident_state,
 )
+from app.agent.identity import AgentIdentity, AgentRole
+from app.agent.tool_risk import ToolRiskLevel
 
 
 def test_create_incident_state_generates_durable_defaults() -> None:
@@ -28,9 +30,25 @@ def test_create_incident_state_generates_durable_defaults() -> None:
     assert state["past_steps"] == []
     assert state["evidence"] == []
     assert state["tool_calls"] == []
+    assert state["identity"]["identity_id"] == "oncall-observer"
     assert state["response"] == ""
     assert state["error"] is None
     assert state["created_at"] == state["updated_at"]
+    json.dumps(state)
+
+
+def test_create_incident_state_persists_explicit_identity() -> None:
+    identity = AgentIdentity(
+        identity_id="checkout-operator",
+        role=AgentRole.OPERATOR,
+        tool_scope=("query_*",),
+        service_scope=("checkout",),
+        risk_ceiling=ToolRiskLevel.WRITE,
+    )
+
+    state = create_incident_state("diagnose checkout", identity=identity)
+
+    assert state["identity"] == identity.to_record()
     json.dumps(state)
 
 
