@@ -37,6 +37,14 @@ class AIOpsRequest(BaseModel):
     )
 
 
+class ApprovalDecisionRequest(BaseModel):
+    """Human decision used to resume a paused incident."""
+
+    approved: bool
+    decided_by: str = Field(min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=1000)
+
+
 class AlertInfo(BaseModel):
     """告警信息"""
     alertname: str

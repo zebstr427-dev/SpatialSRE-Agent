@@ -5,11 +5,12 @@ Executor 节点：执行单个步骤
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_qwq import ChatQwen
 from loguru import logger
 
 from app.agent.identity import AgentIdentity
+from app.agent.approval import create_approval_request
 from app.agent.tool_gateway import ToolExecutionResult, create_tool_gateway
 from app.config import config
 
@@ -35,9 +36,35 @@ async def executor(state: IncidentState) -> dict[str, Any]:
     identity = AgentIdentity.from_record(state["identity"])
     started_at = utc_now_iso()
     tool_call_audits: list[ToolCallAuditRecord] = []
+    policy_decisions: list[dict[str, object]] = []
+    pending_tool_calls = list(state.get("pending_tool_calls", []))
+    approval_decision = state.get("approval_decision")
     logger.info(f"当前任务: {task}")
 
+    if pending_tool_calls and approval_decision is not None:
+        if not bool(approval_decision.get("approved")):
+            decided_by = str(approval_decision.get("decided_by", "unknown"))
+            reason = approval_decision.get("reason") or "no reason provided"
+            return {
+                "plan": plan[1:],
+                "past_steps": [
+                    create_executed_step(
+                        task,
+                        f"Tool approval rejected by {decided_by}: {reason}",
+                        status="failed",
+                        started_at=started_at,
+                    )
+                ],
+                "pending_tool_calls": [],
+                "approval_decision": None,
+                "tool_calls": [],
+                "policy_decisions": [],
+                "updated_at": utc_now_iso(),
+            }
+
     def record_tool_call(result: ToolExecutionResult) -> None:
+        if result.policy_decision is not None:
+            policy_decisions.append(dict(result.policy_decision))
         tool_call_audits.append(
             create_tool_call_audit_record(
                 tool_call_id=result.tool_call_id,
@@ -55,9 +82,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
         )
 
     try:
-        gateway = await create_tool_gateway(
-            audit_hook=record_tool_call
-        )
+        gateway = await create_tool_gateway(audit_hook=record_tool_call)
         all_tools = gateway.list_tools()
         logger.info(f"Gateway 可用工具数量: {len(all_tools)}")
 
@@ -67,36 +92,38 @@ async def executor(state: IncidentState) -> dict[str, Any]:
             temperature=0,
         )
         llm_with_tools = llm.bind_tools(all_tools)
-
         messages = [
             SystemMessage(
-                content="""你是一个能力强大的助手，负责执行具体的任务步骤。
-
-你可以使用各种工具来完成任务。对于每个步骤：
-1. 理解步骤的目标
-2. 选择合适的工具，如果已经指定了工具，则使用指定的工具
-3. 调用工具获取信息
-4. 返回执行结果
-
-注意：
-- 如果工具调用失败，请说明失败原因
-- 不要编造数据，只返回实际获取的信息
-- 执行结果要清晰、准确
-- 专注于当前步骤，不要考虑其他任务"""
+                content=(
+                    "你负责执行一个诊断步骤。只能使用已注册工具，"
+                    "必须基于真实工具结果，不得编造数据。"
+                )
             ),
             HumanMessage(content=f"请执行以下任务: {task}"),
         ]
 
-        llm_response = await llm_with_tools.ainvoke(messages)
+        if pending_tool_calls:
+            llm_response = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": str(item["tool_call_id"]),
+                        "name": str(item["tool_name"]),
+                        "args": dict(item.get("arguments", {})),
+                    }
+                    for item in pending_tool_calls
+                ],
+            )
+        else:
+            llm_response = await llm_with_tools.ainvoke(messages)
         logger.info(f"LLM 响应类型: {type(llm_response)}")
 
         if hasattr(llm_response, "tool_calls") and llm_response.tool_calls:
-            logger.info(
-                f"检测到 {len(llm_response.tool_calls)} 个工具调用"
-            )
             messages.append(llm_response)
             tool_results: list[ToolExecutionResult] = []
-
+            approved = bool(
+                approval_decision and approval_decision.get("approved")
+            )
             for tool_call in llm_response.tool_calls:
                 tool_results.append(
                     await gateway.invoke(
@@ -105,25 +132,55 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                         arguments=dict(tool_call.get("args", {})),
                         dry_run=True,
                         identity=identity,
+                        approval_granted=approved,
                     )
                 )
 
+            approval_results = [
+                item
+                for item in tool_results
+                if item.error_code == "tool_approval_required"
+            ]
+            if approval_results:
+                requests = list(state.get("approval_requests", []))
+                pending_records: list[dict[str, object]] = []
+                for item in approval_results:
+                    decision = item.policy_decision or {}
+                    request = create_approval_request(
+                        incident_id=state["incident_id"],
+                        identity_id=identity.identity_id,
+                        tool_call_id=item.tool_call_id,
+                        tool_name=item.tool_name,
+                        arguments=item.arguments,
+                        risk_level=item.risk_level,
+                        policy_decision_id=str(decision.get("decision_id", "")),
+                    )
+                    requests.append(request.to_record())
+                    pending_records.append(
+                        {
+                            "tool_call_id": item.tool_call_id,
+                            "tool_name": item.tool_name,
+                            "arguments": dict(item.arguments),
+                        }
+                    )
+                return {
+                    "pending_tool_calls": pending_records,
+                    "approval_requests": requests,
+                    "tool_calls": tool_call_audits,
+                    "policy_decisions": policy_decisions,
+                    "updated_at": utc_now_iso(),
+                }
+
             failed_results = [
-                result
-                for result in tool_results
-                if result.status == "failed"
+                item for item in tool_results if item.status == "failed"
             ]
             if failed_results:
                 failure_summary = "; ".join(
-                    (
-                        f"{item.tool_name} [{item.error_code}]: "
-                        f"{item.error_message or item.output}"
-                    )
+                    f"{item.tool_name} [{item.error_code}]: "
+                    f"{item.error_message or item.output}"
                     for item in failed_results
                 )
-                raise RuntimeError(
-                    f"Tool execution failed: {failure_summary}"
-                )
+                raise RuntimeError(f"Tool execution failed: {failure_summary}")
 
             messages.extend(
                 ToolMessage(
@@ -135,22 +192,11 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 for item in tool_results
             )
             final_response = await llm_with_tools.ainvoke(messages)
-            result = (
-                final_response.content
-                if hasattr(final_response, "content")
-                else str(final_response)
-            )
+            result = getattr(final_response, "content", str(final_response))
         else:
-            logger.info("LLM 未调用工具，直接返回结果")
-            result = (
-                llm_response.content
-                if hasattr(llm_response, "content")
-                else str(llm_response)
-            )
+            result = getattr(llm_response, "content", str(llm_response))
 
         result = str(result)
-        logger.info(f"步骤执行完成，结果长度: {len(result)}")
-
         return {
             "plan": plan[1:],
             "past_steps": [
@@ -161,10 +207,12 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     started_at=started_at,
                 )
             ],
+            "pending_tool_calls": [],
+            "approval_decision": None,
             "tool_calls": tool_call_audits,
+            "policy_decisions": policy_decisions,
             "updated_at": utc_now_iso(),
         }
-
     except Exception as exc:
         logger.error(f"执行步骤失败: {exc}", exc_info=True)
         return {
@@ -177,6 +225,9 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     started_at=started_at,
                 )
             ],
+            "pending_tool_calls": [],
+            "approval_decision": None,
             "tool_calls": tool_call_audits,
+            "policy_decisions": policy_decisions,
             "updated_at": utc_now_iso(),
         }

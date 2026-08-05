@@ -13,7 +13,13 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from loguru import logger
 
-from app.agent.identity import AgentIdentity
+from app.agent.identity import AgentIdentity, default_agent_identity
+from app.agent.policy import (
+    PolicyAction,
+    PolicyContext,
+    ToolPolicyEngine,
+    load_default_tool_policy,
+)
 from app.agent.tool_risk import (
     ToolRiskLevel,
     ToolRiskMetadata,
@@ -27,6 +33,8 @@ ToolErrorCode = Literal[
     "tool_dry_run_required",
     "tool_risk_blocked",
     "tool_identity_denied",
+    "tool_policy_denied",
+    "tool_approval_required",
     "tool_timeout",
     "tool_execution_failed",
 ]
@@ -58,6 +66,7 @@ class ToolExecutionResult:
     risk_level: ToolRiskLevel
     dry_run: bool
     identity_id: str | None
+    policy_decision: dict[str, object] | None
 
 
 ToolAuditHook = Callable[
@@ -75,9 +84,11 @@ class ToolGateway:
         self,
         *,
         audit_hook: ToolAuditHook | None = None,
+        policy_engine: ToolPolicyEngine | None = None,
     ) -> None:
         self._registrations: dict[str, ToolRegistration] = {}
         self._audit_hook = audit_hook
+        self._policy_engine = policy_engine
 
     def register(
         self,
@@ -127,6 +138,8 @@ class ToolGateway:
         arguments: dict[str, Any],
         dry_run: bool = False,
         identity: AgentIdentity | None = None,
+        environment: str = "production",
+        approval_granted: bool = False,
     ) -> ToolExecutionResult:
         started_at = _utc_now_iso()
         safe_arguments = dict(arguments)
@@ -148,6 +161,7 @@ class ToolGateway:
                 risk_level=ToolRiskLevel.HIGH_RISK,
                 dry_run=False,
                 identity_id=identity.identity_id if identity else None,
+                policy_decision=None,
             )
             await self._emit_audit(result)
             return result
@@ -184,6 +198,7 @@ class ToolGateway:
                     risk_level=risk_metadata.level,
                     dry_run=False,
                     identity_id=identity.identity_id,
+                    policy_decision=None,
                 )
                 await self._emit_audit(result)
                 return result
@@ -205,9 +220,71 @@ class ToolGateway:
                 risk_level=risk_metadata.level,
                 dry_run=False,
                 identity_id=identity.identity_id if identity else None,
+                policy_decision=None,
             )
             await self._emit_audit(result)
             return result
+
+        policy_decision: dict[str, object] | None = None
+        if self._policy_engine is not None:
+            resolved_identity = identity or default_agent_identity()
+            service_value = safe_arguments.get("service")
+            service = service_value if isinstance(service_value, str) else None
+            decision = self._policy_engine.evaluate(
+                PolicyContext(
+                    identity=resolved_identity,
+                    tool_name=tool_name,
+                    service=service,
+                    risk_level=risk_metadata.level,
+                    environment=environment,
+                )
+            )
+            policy_decision = decision.to_record()
+            if decision.action is PolicyAction.DENY:
+                message = f"Tool '{tool_name}' denied by policy"
+                result = ToolExecutionResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    source=registration.source,
+                    arguments=safe_arguments,
+                    status="failed",
+                    output=message,
+                    error_code="tool_policy_denied",
+                    error_message=message,
+                    attempts=0,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    risk_level=risk_metadata.level,
+                    dry_run=False,
+                    identity_id=resolved_identity.identity_id,
+                    policy_decision=policy_decision,
+                )
+                await self._emit_audit(result)
+                return result
+            if (
+                decision.action is PolicyAction.REQUIRE_APPROVAL
+                and not approval_granted
+            ):
+                message = f"Tool '{tool_name}' requires human approval"
+                result = ToolExecutionResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    source=registration.source,
+                    arguments=safe_arguments,
+                    status="failed",
+                    output=message,
+                    error_code="tool_approval_required",
+                    error_message=message,
+                    attempts=0,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    risk_level=risk_metadata.level,
+                    dry_run=False,
+                    identity_id=resolved_identity.identity_id,
+                    policy_decision=policy_decision,
+                )
+                await self._emit_audit(result)
+                return result
 
         if risk_metadata.level is ToolRiskLevel.WRITE:
             if not dry_run:
@@ -227,6 +304,7 @@ class ToolGateway:
                     risk_level=risk_metadata.level,
                     dry_run=False,
                     identity_id=identity.identity_id if identity else None,
+                    policy_decision=policy_decision,
                 )
                 await self._emit_audit(result)
                 return result
@@ -254,6 +332,7 @@ class ToolGateway:
                 risk_level=risk_metadata.level,
                 dry_run=dry_run,
                 identity_id=identity.identity_id if identity else None,
+                policy_decision=policy_decision,
             )
             await self._emit_audit(result)
             return result
@@ -283,6 +362,7 @@ class ToolGateway:
                     risk_level=risk_metadata.level,
                     dry_run=dry_run,
                     identity_id=identity.identity_id if identity else None,
+                    policy_decision=policy_decision,
                 )
                 await self._emit_audit(result)
                 return result
@@ -317,6 +397,7 @@ class ToolGateway:
             risk_level=risk_metadata.level,
             dry_run=dry_run,
             identity_id=identity.identity_id if identity else None,
+            policy_decision=policy_decision,
         )
         await self._emit_audit(result)
         return result
@@ -347,6 +428,7 @@ async def create_tool_gateway(
     timeout_seconds: float = 10.0,
     max_attempts: int = 1,
     retry_delay_seconds: float = 0.0,
+    policy_engine: ToolPolicyEngine | None = None,
 ) -> ToolGateway:
     if local_tools is None:
         from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
@@ -361,7 +443,13 @@ async def create_tool_gateway(
 
     resolved_local_tools = tuple(local_tools)
     resolved_mcp_tools = tuple(mcp_tools)
-    gateway = ToolGateway(audit_hook=audit_hook)
+    gateway = ToolGateway(
+        audit_hook=audit_hook,
+        policy_engine=(
+            policy_engine
+            or ToolPolicyEngine(load_default_tool_policy())
+        ),
+    )
 
     for tool in resolved_local_tools:
         gateway.register(

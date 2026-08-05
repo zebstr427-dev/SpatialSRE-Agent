@@ -11,7 +11,7 @@ from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.aiops.state import utc_now_iso
-from app.models.aiops import AIOpsRequest
+from app.models.aiops import AIOpsRequest, ApprovalDecisionRequest
 from app.services.aiops_service import AIOpsService
 
 router = APIRouter()
@@ -191,3 +191,24 @@ async def get_incident(
     if state is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     return state
+
+
+@router.post("/incidents/{incident_id}/approval")
+async def resolve_incident_approval(
+    incident_id: str,
+    decision: ApprovalDecisionRequest,
+    aiops_service: AIOpsServiceDependency,
+) -> dict[str, Any]:
+    """Approve or reject the durable tool request for an incident."""
+
+    try:
+        return await aiops_service.resolve_approval(
+            incident_id,
+            approved=decision.approved,
+            decided_by=decision.decided_by,
+            reason=decision.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Incident not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

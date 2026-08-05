@@ -8,6 +8,7 @@ from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command
 from loguru import logger
 
 from app.agent.aiops.state import IncidentState, create_incident_state, utc_now_iso
@@ -17,6 +18,7 @@ from app.agent.identity import AgentIdentity
 NODE_PLANNER = "planner"
 NODE_EXECUTOR = "executor"
 NODE_REPLANNER = "replanner"
+NODE_APPROVAL = "approval"
 NodeCallable = Callable[[IncidentState], Awaitable[dict[str, Any]]]
 
 
@@ -30,6 +32,7 @@ class AIOpsService:
         planner_node: NodeCallable | None = None,
         executor_node: NodeCallable | None = None,
         replanner_node: NodeCallable | None = None,
+        approval_node_callable: NodeCallable | None = None,
     ):
         """Initialize the graph with caller-owned persistence and injectable nodes."""
 
@@ -39,11 +42,14 @@ class AIOpsService:
             from app.agent.aiops.executor import executor as executor_node
         if replanner_node is None:
             from app.agent.aiops.replanner import replanner as replanner_node
+        if approval_node_callable is None:
+            from app.agent.approval import approval_node as approval_node_callable
 
         self.checkpointer = checkpointer
         self.planner_node = planner_node
         self.executor_node = executor_node
         self.replanner_node = replanner_node
+        self.approval_node = approval_node_callable
         self.graph = self._build_graph()
         logger.info("Plan-Execute-Replan Service 初始化完成")
 
@@ -58,13 +64,27 @@ class AIOpsService:
         workflow.add_node(NODE_PLANNER, self.planner_node)  # 制定计划
         workflow.add_node(NODE_EXECUTOR, self.executor_node)  # 执行步骤
         workflow.add_node(NODE_REPLANNER, self.replanner_node)  # 重新规划
+        workflow.add_node(NODE_APPROVAL, self.approval_node)
 
         # 设置入口点
         workflow.set_entry_point(NODE_PLANNER)
 
         # 定义边
         workflow.add_edge(NODE_PLANNER, NODE_EXECUTOR)     # planner -> executor
-        workflow.add_edge(NODE_EXECUTOR, NODE_REPLANNER)   # executor -> replanner
+        def after_executor(state: IncidentState) -> str:
+            if state.get("pending_tool_calls") and state.get("approval_decision") is None:
+                return NODE_APPROVAL
+            return NODE_REPLANNER
+
+        workflow.add_conditional_edges(
+            NODE_EXECUTOR,
+            after_executor,
+            {
+                NODE_APPROVAL: NODE_APPROVAL,
+                NODE_REPLANNER: NODE_REPLANNER,
+            },
+        )
+        workflow.add_edge(NODE_APPROVAL, NODE_EXECUTOR)
 
         # replanner 的条件边
         def should_continue(state: IncidentState) -> str:
@@ -179,6 +199,30 @@ class AIOpsService:
             if final_state and final_state.values:
                 final_response = final_state.values.get("response", "")
 
+            approval_requests = (
+                final_state.values.get("approval_requests", [])
+                if final_state and final_state.values
+                else []
+            )
+            pending_approval = next(
+                (
+                    item
+                    for item in reversed(approval_requests)
+                    if item.get("status") == "pending"
+                ),
+                None,
+            )
+            if pending_approval is not None:
+                yield enrich(
+                    {
+                        "type": "approval_required",
+                        "stage": "approval",
+                        "message": "工具调用等待人工审批",
+                        "approval": pending_approval,
+                    }
+                )
+                return
+
             # 发送完成事件
             yield enrich({
                 "type": "complete",
@@ -206,6 +250,41 @@ class AIOpsService:
         if not snapshot.values:
             return None
         return dict(snapshot.values)
+
+    async def resolve_approval(
+        self,
+        incident_id: str,
+        *,
+        approved: bool,
+        decided_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Resume a checkpointed approval interrupt and return latest state."""
+
+        config_dict = {"configurable": {"thread_id": incident_id}}
+        snapshot = await self.graph.aget_state(config_dict)
+        if not snapshot.values:
+            raise KeyError("incident not found")
+        pending = [
+            item
+            for item in snapshot.values.get("approval_requests", [])
+            if item.get("status") == "pending"
+        ]
+        if not pending:
+            raise ValueError("incident has no pending approval")
+
+        await self.graph.ainvoke(
+            Command(
+                resume={
+                    "approved": approved,
+                    "decided_by": decided_by,
+                    "reason": reason,
+                }
+            ),
+            config=config_dict,
+        )
+        resolved = await self.graph.aget_state(config_dict)
+        return dict(resolved.values)
 
     async def diagnose(
         self,

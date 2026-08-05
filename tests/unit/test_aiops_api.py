@@ -46,6 +46,25 @@ class FakeAIOpsService:
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
         return self.incidents.get(incident_id)
 
+    async def resolve_approval(
+        self,
+        incident_id: str,
+        *,
+        approved: bool,
+        decided_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "incident_id": incident_id,
+            "approval_requests": [
+                {
+                    "status": "approved" if approved else "rejected",
+                    "decided_by": decided_by,
+                    "reason": reason,
+                }
+            ],
+        }
+
 
 def _client(service: FakeAIOpsService) -> TestClient:
     app = FastAPI()
@@ -92,3 +111,17 @@ def test_get_incident_returns_404_for_unknown_id() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Incident not found"}
+
+
+def test_resolve_incident_approval() -> None:
+    response = _client(FakeAIOpsService()).post(
+        "/api/incidents/incident-456/approval",
+        json={
+            "approved": True,
+            "decided_by": "sre.lead",
+            "reason": "change window confirmed",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approval_requests"][0]["status"] == "approved"

@@ -65,6 +65,10 @@ class IncidentState(TypedDict):
     past_steps: Annotated[list[ExecutedStep], operator.add]
     evidence: Annotated[list[EvidenceRecord], operator.add]
     tool_calls: Annotated[list[ToolCallAuditRecord], operator.add]
+    policy_decisions: Annotated[list[dict[str, object]], operator.add]
+    pending_tool_calls: list[dict[str, object]]
+    approval_requests: list[dict[str, object]]
+    approval_decision: dict[str, object] | None
     response: str
     status: IncidentStatus
     error: str | None
@@ -161,6 +165,10 @@ def create_incident_state(
         "past_steps": [],
         "evidence": [],
         "tool_calls": [],
+        "policy_decisions": [],
+        "pending_tool_calls": [],
+        "approval_requests": [],
+        "approval_decision": None,
         "response": "",
         "status": "pending",
         "error": None,

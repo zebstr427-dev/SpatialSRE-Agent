@@ -1,0 +1,29 @@
+{
+  "version": "2026-08-05",
+  "default_action": "deny",
+  "rules": [
+    {
+      "name": "readonly-auto-allow",
+      "when": {
+        "risk_levels": ["read_only"]
+      },
+      "action": "allow"
+    },
+    {
+      "name": "production-write-requires-approval",
+      "when": {
+        "environments": ["production"],
+        "risk_levels": ["write"]
+      },
+      "action": "require_approval"
+    },
+    {
+      "name": "non-production-write-dry-run",
+      "when": {
+        "environments": ["development", "staging"],
+        "risk_levels": ["write"]
+      },
+      "action": "allow"
+    }
+  ]
+}
