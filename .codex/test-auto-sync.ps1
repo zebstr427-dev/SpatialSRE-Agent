@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-$syncScript = Join-Path $PSScriptRoot "auto-sync.ps1"
+$silentLauncher = Join-Path $PSScriptRoot "auto-sync-silent.vbs"
 
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $syncScript
+& cscript.exe //B //NoLogo $silentLauncher
 if ($LASTEXITCODE -ne 0) {
-    throw "auto-sync.ps1 exited with code $LASTEXITCODE"
+    throw "auto-sync-silent.vbs exited with code $LASTEXITCODE"
 }
 
 Write-Output "auto-sync regression test passed"
