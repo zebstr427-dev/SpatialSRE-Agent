@@ -8,6 +8,8 @@ import pytest
 from langchain_core.tools import StructuredTool
 
 from app.agent.tool_gateway import ToolGateway, create_tool_gateway
+from app.agent.identity import AgentIdentity, AgentRole
+from app.agent.policy import ToolPolicy, ToolPolicyEngine
 from app.agent.tool_risk import (
     HIGH_RISK_METADATA,
     READ_ONLY_METADATA,
@@ -279,3 +281,123 @@ async def test_high_risk_and_unclassified_registered_tools_fail_closed() -> None
     assert explicit.risk_level is ToolRiskLevel.HIGH_RISK
     assert unclassified.risk_level is ToolRiskLevel.HIGH_RISK
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_identity_scope_and_risk_ceiling_are_mandatory() -> None:
+    async def operation(service: str, dry_run: bool = False) -> str:
+        return f"{service}:{dry_run}"
+
+    identity = AgentIdentity(
+        identity_id="checkout-observer",
+        role=AgentRole.OBSERVER,
+        tool_scope=("query_*",),
+        service_scope=("checkout",),
+        risk_ceiling=ToolRiskLevel.READ_ONLY,
+    )
+    gateway = ToolGateway()
+    gateway.register(
+        _tool("query_health", operation),
+        source="local",
+        risk_metadata=READ_ONLY_METADATA,
+    )
+    gateway.register(
+        _tool("restart_service", operation),
+        source="local",
+        risk_metadata=ToolRiskMetadata(
+            level=ToolRiskLevel.WRITE,
+            dry_run_argument="dry_run",
+        ),
+    )
+
+    allowed = await gateway.invoke(
+        tool_call_id="call-allowed",
+        tool_name="query_health",
+        arguments={"service": "checkout"},
+        identity=identity,
+    )
+    wrong_service = await gateway.invoke(
+        tool_call_id="call-service-denied",
+        tool_name="query_health",
+        arguments={"service": "identity"},
+        identity=identity,
+    )
+    wrong_tool_and_risk = await gateway.invoke(
+        tool_call_id="call-risk-denied",
+        tool_name="restart_service",
+        arguments={"service": "checkout"},
+        identity=identity,
+        dry_run=True,
+    )
+
+    assert allowed.status == "succeeded"
+    assert allowed.identity_id == "checkout-observer"
+    assert wrong_service.error_code == "tool_identity_denied"
+    assert "service scope" in wrong_service.error_message
+    assert wrong_tool_and_risk.error_code == "tool_identity_denied"
+    assert "tool scope" in wrong_tool_and_risk.error_message
+
+
+@pytest.mark.asyncio
+async def test_gateway_enforces_and_audits_policy_decisions() -> None:
+    async def operation(service: str, dry_run: bool = False) -> str:
+        return f"{service}:{dry_run}"
+
+    policy = ToolPolicy.model_validate(
+        {
+            "version": "v1",
+            "default_action": "deny",
+            "rules": [
+                {
+                    "name": "readonly-allow",
+                    "when": {"risk_levels": ["read_only"]},
+                    "action": "allow",
+                },
+                {
+                    "name": "write-approval",
+                    "when": {"risk_levels": ["write"]},
+                    "action": "require_approval",
+                },
+            ],
+        }
+    )
+    identity = AgentIdentity(
+        identity_id="checkout-operator",
+        role=AgentRole.OPERATOR,
+        tool_scope=("*",),
+        service_scope=("checkout",),
+        risk_ceiling=ToolRiskLevel.WRITE,
+    )
+    gateway = ToolGateway(policy_engine=ToolPolicyEngine(policy))
+    gateway.register(
+        _tool("query_health", operation),
+        source="local",
+        risk_metadata=READ_ONLY_METADATA,
+    )
+    gateway.register(
+        _tool("restart_service", operation),
+        source="local",
+        risk_metadata=ToolRiskMetadata(
+            level=ToolRiskLevel.WRITE,
+            dry_run_argument="dry_run",
+        ),
+    )
+
+    allowed = await gateway.invoke(
+        tool_call_id="call-read",
+        tool_name="query_health",
+        arguments={"service": "checkout"},
+        identity=identity,
+    )
+    approval = await gateway.invoke(
+        tool_call_id="call-write",
+        tool_name="restart_service",
+        arguments={"service": "checkout"},
+        identity=identity,
+        dry_run=True,
+    )
+
+    assert allowed.status == "succeeded"
+    assert allowed.policy_decision["action"] == "allow"
+    assert approval.error_code == "tool_approval_required"
+    assert approval.policy_decision["action"] == "require_approval"

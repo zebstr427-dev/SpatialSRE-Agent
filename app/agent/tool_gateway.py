@@ -13,6 +13,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from loguru import logger
 
+from app.agent.identity import AgentIdentity
 from app.agent.tool_risk import (
     ToolRiskLevel,
     ToolRiskMetadata,
@@ -25,6 +26,7 @@ ToolErrorCode = Literal[
     "tool_not_found",
     "tool_dry_run_required",
     "tool_risk_blocked",
+    "tool_identity_denied",
     "tool_timeout",
     "tool_execution_failed",
 ]
@@ -55,6 +57,7 @@ class ToolExecutionResult:
     finished_at: str
     risk_level: ToolRiskLevel
     dry_run: bool
+    identity_id: str | None
 
 
 ToolAuditHook = Callable[
@@ -123,6 +126,7 @@ class ToolGateway:
         tool_name: str,
         arguments: dict[str, Any],
         dry_run: bool = False,
+        identity: AgentIdentity | None = None,
     ) -> ToolExecutionResult:
         started_at = _utc_now_iso()
         safe_arguments = dict(arguments)
@@ -143,11 +147,47 @@ class ToolGateway:
                 finished_at=_utc_now_iso(),
                 risk_level=ToolRiskLevel.HIGH_RISK,
                 dry_run=False,
+                identity_id=identity.identity_id if identity else None,
             )
             await self._emit_audit(result)
             return result
 
         risk_metadata = registration.risk_metadata
+        if identity is not None:
+            service_value = safe_arguments.get("service")
+            service = service_value if isinstance(service_value, str) else None
+            denial_reason = None
+            if not identity.allows_tool(tool_name):
+                denial_reason = "tool scope"
+            elif not identity.allows_service(service):
+                denial_reason = "service scope"
+            elif not identity.allows_risk(risk_metadata.level):
+                denial_reason = "risk ceiling"
+
+            if denial_reason is not None:
+                message = (
+                    f"Identity '{identity.identity_id}' denied tool "
+                    f"'{tool_name}' by {denial_reason}"
+                )
+                result = ToolExecutionResult(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    source=registration.source,
+                    arguments=safe_arguments,
+                    status="failed",
+                    output=message,
+                    error_code="tool_identity_denied",
+                    error_message=message,
+                    attempts=0,
+                    started_at=started_at,
+                    finished_at=_utc_now_iso(),
+                    risk_level=risk_metadata.level,
+                    dry_run=False,
+                    identity_id=identity.identity_id,
+                )
+                await self._emit_audit(result)
+                return result
+
         if risk_metadata.level is ToolRiskLevel.HIGH_RISK:
             message = f"Tool '{tool_name}' is blocked by its high-risk classification"
             result = ToolExecutionResult(
@@ -164,6 +204,7 @@ class ToolGateway:
                 finished_at=_utc_now_iso(),
                 risk_level=risk_metadata.level,
                 dry_run=False,
+                identity_id=identity.identity_id if identity else None,
             )
             await self._emit_audit(result)
             return result
@@ -185,6 +226,7 @@ class ToolGateway:
                     finished_at=_utc_now_iso(),
                     risk_level=risk_metadata.level,
                     dry_run=False,
+                    identity_id=identity.identity_id if identity else None,
                 )
                 await self._emit_audit(result)
                 return result
@@ -211,6 +253,7 @@ class ToolGateway:
                 finished_at=_utc_now_iso(),
                 risk_level=risk_metadata.level,
                 dry_run=dry_run,
+                identity_id=identity.identity_id if identity else None,
             )
             await self._emit_audit(result)
             return result
@@ -239,6 +282,7 @@ class ToolGateway:
                     finished_at=_utc_now_iso(),
                     risk_level=risk_metadata.level,
                     dry_run=dry_run,
+                    identity_id=identity.identity_id if identity else None,
                 )
                 await self._emit_audit(result)
                 return result
@@ -272,6 +316,7 @@ class ToolGateway:
             finished_at=_utc_now_iso(),
             risk_level=risk_metadata.level,
             dry_run=dry_run,
+            identity_id=identity.identity_id if identity else None,
         )
         await self._emit_audit(result)
         return result

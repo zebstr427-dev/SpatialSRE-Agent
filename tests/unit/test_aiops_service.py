@@ -2,6 +2,8 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.aiops.state import IncidentState, create_executed_step, utc_now_iso
+from app.agent.identity import AgentIdentity, AgentRole
+from app.agent.tool_risk import ToolRiskLevel
 from app.services.aiops_service import AIOpsService
 
 
@@ -45,6 +47,13 @@ def _service() -> AIOpsService:
 @pytest.mark.asyncio
 async def test_execute_uses_incident_as_thread_and_enriches_every_event() -> None:
     service = _service()
+    identity = AgentIdentity(
+        identity_id="checkout-operator",
+        role=AgentRole.OPERATOR,
+        tool_scope=("query_*",),
+        service_scope=("checkout",),
+        risk_ceiling=ToolRiskLevel.WRITE,
+    )
 
     events = [
         event
@@ -53,6 +62,7 @@ async def test_execute_uses_incident_as_thread_and_enriches_every_event() -> Non
             session_id="session-123",
             incident_id="incident-456",
             trace_id="trace-789",
+            identity=identity,
         )
     ]
 
@@ -68,6 +78,7 @@ async def test_execute_uses_incident_as_thread_and_enriches_every_event() -> Non
     assert snapshot["incident_id"] == "incident-456"
     assert snapshot["session_id"] == "session-123"
     assert snapshot["status"] == "completed"
+    assert snapshot["identity"] == identity.to_record()
     assert snapshot["past_steps"][0]["step"] == "query metrics"
 
 

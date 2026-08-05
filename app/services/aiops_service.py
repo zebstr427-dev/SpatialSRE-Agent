@@ -11,6 +11,7 @@ from langgraph.graph import END, StateGraph
 from loguru import logger
 
 from app.agent.aiops.state import IncidentState, create_incident_state, utc_now_iso
+from app.agent.identity import AgentIdentity
 
 # 节点名称常量
 NODE_PLANNER = "planner"
@@ -105,6 +106,7 @@ class AIOpsService:
         *,
         incident_id: str | None = None,
         trace_id: str | None = None,
+        identity: AgentIdentity | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         执行 Plan-Execute-Replan 流程
@@ -121,6 +123,7 @@ class AIOpsService:
             session_id=session_id,
             incident_id=incident_id,
             trace_id=trace_id,
+            identity=identity,
         )
         resolved_incident_id = initial_state["incident_id"]
         resolved_trace_id = initial_state["trace_id"]
@@ -210,6 +213,7 @@ class AIOpsService:
         *,
         incident_id: str | None = None,
         trace_id: str | None = None,
+        identity: AgentIdentity | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         AIOps 诊断接口（兼容旧接口）
@@ -301,6 +305,7 @@ class AIOpsService:
             session_id,
             incident_id=incident_id,
             trace_id=trace_id,
+            identity=identity,
         ):
             # 转换事件格式以兼容旧的 API
             if event.get("type") == "complete":

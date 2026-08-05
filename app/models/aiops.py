@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agent.identity import AgentIdentity, default_agent_identity
+
 
 class AIOpsRequest(BaseModel):
     """AIOps 诊断请求"""
@@ -28,6 +30,10 @@ class AIOpsRequest(BaseModel):
         min_length=1,
         max_length=128,
         description="故障ID，用作持久化工作流的唯一线程标识",
+    )
+    identity: AgentIdentity = Field(
+        default_factory=default_agent_identity,
+        description="执行诊断的 Agent 身份与权限范围",
     )
 
 

@@ -10,6 +10,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 import app.agent.aiops.executor as executor_module
 from app.agent.aiops.state import create_incident_state
 from app.agent.tool_gateway import ToolGateway
+from app.agent.identity import AgentIdentity, AgentRole
 from app.agent.tool_risk import READ_ONLY_METADATA
 from app.agent.tool_risk import ToolRiskLevel, ToolRiskMetadata
 
@@ -112,6 +113,7 @@ async def test_executor_routes_tools_and_audits_by_call_id(
     ]
     assert all(datetime.fromisoformat(item["started_at"]) for item in audits)
     assert all(datetime.fromisoformat(item["finished_at"]) for item in audits)
+    assert all(item["identity_id"] == "oncall-observer" for item in audits)
     json.dumps(audits)
 
 
@@ -180,9 +182,16 @@ async def test_executor_requests_write_tools_in_dry_run_mode(
         ),
     )
 
-    result = await executor_module.executor(
-        _state_with_plan("simulate checkout restart")
-    )
+    state = _state_with_plan("simulate checkout restart")
+    state["identity"] = AgentIdentity(
+        identity_id="checkout-operator",
+        role=AgentRole.OPERATOR,
+        tool_scope=("restart_service",),
+        service_scope=("checkout",),
+        risk_ceiling=ToolRiskLevel.WRITE,
+    ).to_record()
+    result = await executor_module.executor(state)
 
     assert result["past_steps"][0]["status"] == "succeeded"
     assert received == [True]
+    assert result["tool_calls"][0]["identity_id"] == "checkout-operator"

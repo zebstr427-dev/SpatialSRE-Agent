@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, NotRequired, TypedDict
 from uuid import uuid4
 
+from app.agent.identity import AgentIdentity, default_agent_identity
+
 IncidentSeverity = Literal["critical", "high", "medium", "low", "unknown"]
 IncidentStatus = Literal["pending", "running", "completed", "failed"]
 StepStatus = Literal["succeeded", "failed"]
@@ -45,6 +47,9 @@ class ToolCallAuditRecord(TypedDict):
     status: ToolCallStatus
     started_at: str
     finished_at: str
+    identity_id: NotRequired[str]
+    risk_level: NotRequired[str]
+    dry_run: NotRequired[bool]
 
 
 class IncidentState(TypedDict):
@@ -54,6 +59,7 @@ class IncidentState(TypedDict):
     incident_id: str
     trace_id: str
     session_id: str
+    identity: dict[str, object]
     severity: IncidentSeverity
     plan: list[str]
     past_steps: Annotated[list[ExecutedStep], operator.add]
@@ -82,6 +88,9 @@ def create_tool_call_audit_record(
     status: ToolCallStatus,
     started_at: str,
     finished_at: str | None = None,
+    identity_id: str | None = None,
+    risk_level: str | None = None,
+    dry_run: bool | None = None,
 ) -> ToolCallAuditRecord:
     """Build a structured tool invocation record for checkpoint history."""
 
@@ -90,7 +99,7 @@ def create_tool_call_audit_record(
     except (TypeError, ValueError) as exc:
         raise ValueError("arguments must be JSON-serializable") from exc
 
-    return {
+    record: ToolCallAuditRecord = {
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
         "step": step,
@@ -100,6 +109,13 @@ def create_tool_call_audit_record(
         "started_at": started_at,
         "finished_at": finished_at or utc_now_iso(),
     }
+    if identity_id is not None:
+        record["identity_id"] = identity_id
+    if risk_level is not None:
+        record["risk_level"] = risk_level
+    if dry_run is not None:
+        record["dry_run"] = dry_run
+    return record
 
 
 def create_executed_step(
@@ -128,15 +144,18 @@ def create_incident_state(
     incident_id: str | None = None,
     trace_id: str | None = None,
     severity: IncidentSeverity = "unknown",
+    identity: AgentIdentity | None = None,
 ) -> IncidentState:
     """Create a complete initial state using checkpoint-safe primitive values."""
 
     timestamp = utc_now_iso()
+    resolved_identity = identity or default_agent_identity()
     return {
         "input": user_input,
         "incident_id": incident_id or str(uuid4()),
         "trace_id": trace_id or uuid4().hex,
         "session_id": session_id,
+        "identity": resolved_identity.to_record(),
         "severity": severity,
         "plan": [],
         "past_steps": [],

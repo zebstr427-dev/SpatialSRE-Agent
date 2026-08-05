@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_qwq import ChatQwen
 from loguru import logger
 
+from app.agent.identity import AgentIdentity
 from app.agent.tool_gateway import ToolExecutionResult, create_tool_gateway
 from app.config import config
 
@@ -31,6 +32,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
         return {}
 
     task = plan[0]
+    identity = AgentIdentity.from_record(state["identity"])
     started_at = utc_now_iso()
     tool_call_audits: list[ToolCallAuditRecord] = []
     logger.info(f"当前任务: {task}")
@@ -46,6 +48,9 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 status=result.status,
                 started_at=result.started_at,
                 finished_at=result.finished_at,
+                identity_id=result.identity_id,
+                risk_level=result.risk_level.value,
+                dry_run=result.dry_run,
             )
         )
 
@@ -99,6 +104,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                         tool_name=str(tool_call["name"]),
                         arguments=dict(tool_call.get("args", {})),
                         dry_run=True,
+                        identity=identity,
                     )
                 )
 
