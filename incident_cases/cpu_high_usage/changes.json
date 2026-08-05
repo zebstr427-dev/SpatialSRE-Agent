@@ -1,0 +1,6 @@
+{
+  "service": "payment",
+  "deployment": "payment-v2",
+  "deployed_at": "2026-08-05T01:42:00+00:00",
+  "evidence_id": "change-payment-v2"
+}

@@ -1,0 +1,6 @@
+{
+  "root_cause": "batch worker exhausted thread pool",
+  "tool_sequence": ["query_cpu_metrics", "search_log"],
+  "evidence_ids": ["metric-cpu", "log-thread-pool"],
+  "report_points": ["CPU saturation", "thread pool exhaustion", "recent deployment"]
+}

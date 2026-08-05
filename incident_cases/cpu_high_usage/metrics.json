@@ -1,0 +1,6 @@
+{
+  "service": "payment",
+  "cpu_percent": 99,
+  "top_process": "batch-worker",
+  "evidence_id": "metric-cpu"
+}

@@ -1,0 +1,6 @@
+{
+  "service": "payment",
+  "error_code": "THREAD_POOL_EXHAUSTED",
+  "message": "batch worker rejected task",
+  "evidence_id": "log-thread-pool"
+}
