@@ -13,8 +13,11 @@ from uuid import uuid4
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agent.evidence import bind_report_to_evidence
+from app.agent.evidence import bind_report_to_evidence, validate_incident_input
+from app.incident_graph import GraphEdge, GraphNode, NetworkXIncidentGraph
+from app.incident_graph.graphrag import GraphRAGRetriever
 from app.observability import finish_agent_span, start_agent_span
+from app.retrieval.hybrid import DocumentChunk
 from app.runbooks import RunbookRegistry
 
 
@@ -176,6 +179,8 @@ class EnterpriseIncidentWorkflow:
                 "agent_spans": [span],
                 "runbook_id": output.data.get("runbook_id"),
                 "runbook_steps": list(output.data.get("runbook_steps", [])),
+                "graph_context": dict(output.data.get("graph_context", {})),
+                "evidence": list(output.evidence),
             }
 
         async def sre(state: EnterpriseState) -> dict[str, Any]:
@@ -287,8 +292,9 @@ class EnterpriseIncidentWorkflow:
         incident_id: str | None = None,
         trace_id: str | None = None,
     ) -> EnterpriseState:
+        safe_input = validate_incident_input(user_input, max_chars=10_000)
         initial: EnterpriseState = {
-            "input": user_input,
+            "input": safe_input,
             "incident_id": incident_id or str(uuid4()),
             "trace_id": trace_id or uuid4().hex,
             "alert": dict(alert),
@@ -350,6 +356,37 @@ def build_default_agents() -> dict[str, AgentRoleRunner]:
             alert_name=str(alert.get("alert_name", "")),
             severity=(str(alert["severity"]) if alert.get("severity") else None),
         )
+        graph_context = _build_demo_graph_retriever().retrieve(
+            str(state["input"]),
+            max_hops=2,
+            top_k_documents=3,
+        )
+        dependency_ids = [
+            node.id
+            for node in graph_context.nodes
+            if node.type.value == "service" and node.id != alert.get("service")
+        ]
+        historical_incident_ids = [
+            node.id
+            for node in graph_context.nodes
+            if node.type.value == "incident"
+        ]
+        evidence = (
+            {
+                "evidence_id": "graph-payment-context",
+                "source_type": "knowledge",
+                "source": "incident_graph",
+                "content": (
+                    f"dependencies={dependency_ids}; "
+                    f"historical_incidents={historical_incident_ids}"
+                ),
+                "collected_at": datetime.now(UTC).isoformat(),
+                "provenance": {
+                    "citations": list(graph_context.citations),
+                    "seed_node_ids": list(graph_context.seed_node_ids),
+                },
+            },
+        )
         return _role_output(
             "rag",
             "runbook and history retrieved",
@@ -359,7 +396,10 @@ def build_default_agents() -> dict[str, AgentRoleRunner]:
                     [item.to_record() for item in runbook.steps] if runbook else []
                 ),
                 "confidence": 0.95 if runbook else 0.2,
+                "graph_context": graph_context.to_record(),
+                "cited_docs": list(graph_context.citations),
             },
+            evidence=evidence,
         )
 
     async def sre(state: dict[str, Any]) -> RoleOutput:
@@ -438,3 +478,43 @@ def build_default_agents() -> dict[str, AgentRoleRunner]:
         "change": AgentRoleRunner("change", change),
         "report": AgentRoleRunner("report", report),
     }
+
+
+def _build_demo_graph_retriever() -> GraphRAGRetriever:
+    graph = NetworkXIncidentGraph()
+    for node in (
+        GraphNode(id="payment", type="service", name="Payment Service"),
+        GraphNode(id="inventory", type="service", name="Inventory Service"),
+        GraphNode(id="change-payment-v2", type="change", name="Payment v2 rollout"),
+        GraphNode(
+            id="incident-payment-batch",
+            type="incident",
+            name="Historical payment batch worker incident",
+            properties={"root_cause": "thread pool exhaustion"},
+        ),
+    ):
+        graph.upsert_node(node)
+    for edge in (
+        GraphEdge(source="payment", target="inventory", type="depends_on"),
+        GraphEdge(source="payment", target="change-payment-v2", type="changed_by"),
+        GraphEdge(
+            source="incident-payment-batch",
+            target="payment",
+            type="affects",
+        ),
+    ):
+        graph.add_edge(edge)
+    documents = [
+        DocumentChunk(
+            chunk_id="cpu-high-usage-runbook",
+            content=(
+                "Payment CPU diagnosis: inspect batch worker thread pool, "
+                "logs, metrics, and rollout evidence."
+            ),
+            source="runbooks/cpu_high_usage.yaml",
+            service="payment",
+            fault_type="cpu_high_usage",
+            version="1.0.0",
+        )
+    ]
+    return GraphRAGRetriever(graph, documents=documents)

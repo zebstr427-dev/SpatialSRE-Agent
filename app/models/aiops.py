@@ -49,6 +49,15 @@ class ApprovalDecisionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class EnterpriseIncidentRequest(BaseModel):
+    """Request for the structured enterprise incident workflow."""
+
+    input: str = Field(min_length=1, max_length=10_000)
+    alert: dict[str, Any]
+    incident_id: str | None = Field(default=None, min_length=1, max_length=128)
+    trace_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class AlertInfo(BaseModel):
     """告警信息"""
     alertname: str

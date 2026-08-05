@@ -11,7 +11,12 @@ from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.aiops.state import utc_now_iso
-from app.models.aiops import AIOpsRequest, ApprovalDecisionRequest
+from app.agent.enterprise_workflow import EnterpriseIncidentWorkflow
+from app.models.aiops import (
+    AIOpsRequest,
+    ApprovalDecisionRequest,
+    EnterpriseIncidentRequest,
+)
 from app.services.aiops_service import AIOpsService
 
 router = APIRouter()
@@ -25,6 +30,22 @@ def get_aiops_service(request: Request) -> AIOpsService:
 
 
 AIOpsServiceDependency = Annotated[AIOpsService, Depends(get_aiops_service)]
+
+
+def get_enterprise_workflow(request: Request) -> EnterpriseIncidentWorkflow:
+    workflow = getattr(request.app.state, "enterprise_workflow", None)
+    if workflow is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Enterprise incident workflow is not initialized",
+        )
+    return workflow
+
+
+EnterpriseWorkflowDependency = Annotated[
+    EnterpriseIncidentWorkflow,
+    Depends(get_enterprise_workflow),
+]
 
 
 @router.post("/aiops")
@@ -213,3 +234,18 @@ async def resolve_incident_approval(
         raise HTTPException(status_code=404, detail="Incident not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/enterprise/incidents")
+async def run_enterprise_incident(
+    request: EnterpriseIncidentRequest,
+    workflow: EnterpriseWorkflowDependency,
+) -> dict[str, Any]:
+    """Run the deterministic structured multi-agent incident workflow."""
+
+    return await workflow.run(
+        request.input,
+        alert=request.alert,
+        incident_id=request.incident_id,
+        trace_id=request.trace_id,
+    )

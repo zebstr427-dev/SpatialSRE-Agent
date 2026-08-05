@@ -72,6 +72,13 @@ class IncidentState(TypedDict):
     tool_calls: Annotated[list[ToolCallAuditRecord], operator.add]
     policy_decisions: Annotated[list[dict[str, object]], operator.add]
     change_records: Annotated[list[dict[str, object]], operator.add]
+    affected_services: list[str]
+    graph_context: dict[str, object]
+    root_cause: dict[str, object] | None
+    remediation: dict[str, object] | None
+    role_outputs: Annotated[list[dict[str, object]], operator.add]
+    agent_spans: Annotated[list[dict[str, object]], operator.add]
+    cost_metrics: dict[str, object]
     pending_tool_calls: list[dict[str, object]]
     approval_requests: list[dict[str, object]]
     approval_decision: dict[str, object] | None
@@ -178,6 +185,13 @@ def create_incident_state(
         "tool_calls": [],
         "policy_decisions": [],
         "change_records": [],
+        "affected_services": [],
+        "graph_context": {},
+        "root_cause": None,
+        "remediation": None,
+        "role_outputs": [],
+        "agent_spans": [],
+        "cost_metrics": {},
         "pending_tool_calls": [],
         "approval_requests": [],
         "approval_decision": None,

@@ -32,6 +32,12 @@ def test_create_incident_state_generates_durable_defaults() -> None:
     assert state["tool_calls"] == []
     assert state["policy_decisions"] == []
     assert state["change_records"] == []
+    assert state["graph_context"] == {}
+    assert state["root_cause"] is None
+    assert state["remediation"] is None
+    assert state["role_outputs"] == []
+    assert state["agent_spans"] == []
+    assert state["cost_metrics"] == {}
     assert state["identity"]["identity_id"] == "oncall-observer"
     assert state["response"] == ""
     assert state["error"] is None

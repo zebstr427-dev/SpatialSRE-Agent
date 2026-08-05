@@ -68,9 +68,45 @@ class FakeAIOpsService:
         }
 
 
+class FakeEnterpriseWorkflow:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        user_input: str,
+        *,
+        alert: dict[str, object],
+        incident_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            {
+                "user_input": user_input,
+                "alert": alert,
+                "incident_id": incident_id,
+                "trace_id": trace_id,
+            }
+        )
+        return {
+            "incident_id": incident_id,
+            "trace_id": trace_id,
+            "status": "completed",
+            "root_cause": {"summary": "thread pool exhaustion"},
+        }
+
+
 def _client(service: FakeAIOpsService) -> TestClient:
     app = FastAPI()
     app.state.aiops_service = service
+    app.include_router(router, prefix="/api")
+    return TestClient(app)
+
+
+def _enterprise_client(workflow: FakeEnterpriseWorkflow | None) -> TestClient:
+    app = FastAPI()
+    if workflow is not None:
+        app.state.enterprise_workflow = workflow
     app.include_router(router, prefix="/api")
     return TestClient(app)
 
@@ -127,3 +163,48 @@ def test_resolve_incident_approval() -> None:
 
     assert response.status_code == 200
     assert response.json()["approval_requests"][0]["status"] == "approved"
+
+
+def test_run_enterprise_incident_workflow() -> None:
+    workflow = FakeEnterpriseWorkflow()
+
+    response = _enterprise_client(workflow).post(
+        "/api/enterprise/incidents",
+        json={
+            "input": "diagnose payment CPU",
+            "incident_id": "incident-enterprise-1",
+            "trace_id": "trace-enterprise-1",
+            "alert": {
+                "alert_name": "HighCPUUsage",
+                "severity": "warning",
+                "service": "payment",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert workflow.calls == [
+        {
+            "user_input": "diagnose payment CPU",
+            "incident_id": "incident-enterprise-1",
+            "trace_id": "trace-enterprise-1",
+            "alert": {
+                "alert_name": "HighCPUUsage",
+                "severity": "warning",
+                "service": "payment",
+            },
+        }
+    ]
+
+
+def test_enterprise_incident_returns_503_when_runtime_is_missing() -> None:
+    response = _enterprise_client(None).post(
+        "/api/enterprise/incidents",
+        json={
+            "input": "diagnose payment CPU",
+            "alert": {"alert_name": "HighCPUUsage", "service": "payment"},
+        },
+    )
+
+    assert response.status_code == 503

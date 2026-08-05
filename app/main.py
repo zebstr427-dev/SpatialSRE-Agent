@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.api import aiops, chat, file, health
+from app.agent.enterprise_workflow import EnterpriseIncidentWorkflow
 from app.config import config
 from app.core.checkpoint import open_checkpoint_runtime
 from app.core.milvus_client import milvus_manager
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
         async with open_checkpoint_runtime(config) as checkpoint_runtime:
             app.state.checkpoint_runtime = checkpoint_runtime
             app.state.aiops_service = AIOpsService(checkpoint_runtime.saver)
+            app.state.enterprise_workflow = EnterpriseIncidentWorkflow()
             logger.info("Durable AIOps runtime ready")
             logger.info("=" * 60)
             yield
