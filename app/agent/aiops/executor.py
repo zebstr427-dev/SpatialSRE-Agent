@@ -3,6 +3,7 @@ Executor 节点：执行单个步骤
 基于 LangGraph 官方教程实现
 """
 
+import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -11,8 +12,10 @@ from loguru import logger
 
 from app.agent.identity import AgentIdentity
 from app.agent.approval import create_approval_request
+from app.agent.evidence import create_tool_evidence
 from app.agent.tool_gateway import ToolExecutionResult, create_tool_gateway
 from app.config import config
+from app.change_intelligence import ChangeRecord
 
 from .state import (
     IncidentState,
@@ -37,7 +40,11 @@ async def executor(state: IncidentState) -> dict[str, Any]:
     started_at = utc_now_iso()
     tool_call_audits: list[ToolCallAuditRecord] = []
     policy_decisions: list[dict[str, object]] = []
+    evidence_records: list[dict[str, object]] = []
+    change_records: list[dict[str, object]] = []
     pending_tool_calls = list(state.get("pending_tool_calls", []))
+    runbook_steps = list(state.get("runbook_steps", []))
+    remaining_runbook_steps = runbook_steps[1:] if runbook_steps else []
     approval_decision = state.get("approval_decision")
     logger.info(f"当前任务: {task}")
 
@@ -56,6 +63,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     )
                 ],
                 "pending_tool_calls": [],
+                "runbook_steps": remaining_runbook_steps,
                 "approval_decision": None,
                 "tool_calls": [],
                 "policy_decisions": [],
@@ -114,6 +122,26 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     for item in pending_tool_calls
                 ],
             )
+        elif runbook_steps:
+            runbook_step = runbook_steps[0]
+            runbook_arguments = dict(runbook_step.get("arguments", {}))
+            alert = state.get("alert", {})
+            service = alert.get("service")
+            if isinstance(service, str) and "service" not in runbook_arguments:
+                runbook_arguments["service"] = service
+            llm_response = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": (
+                            f"runbook-{state['incident_id']}-"
+                            f"{runbook_step['id']}"
+                        ),
+                        "name": str(runbook_step["tool"]),
+                        "args": runbook_arguments,
+                    }
+                ],
+            )
         else:
             llm_response = await llm_with_tools.ainvoke(messages)
         logger.info(f"LLM 响应类型: {type(llm_response)}")
@@ -168,8 +196,45 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     "approval_requests": requests,
                     "tool_calls": tool_call_audits,
                     "policy_decisions": policy_decisions,
+                    "evidence": evidence_records,
                     "updated_at": utc_now_iso(),
                 }
+
+            for item in tool_results:
+                if item.status != "succeeded":
+                    continue
+                decision = item.policy_decision or {}
+                evidence_records.append(
+                    create_tool_evidence(
+                        tool_call_id=item.tool_call_id,
+                        tool_name=item.tool_name,
+                        arguments=item.arguments,
+                        output=item.output,
+                        identity_id=item.identity_id,
+                        risk_level=item.risk_level.value,
+                        dry_run=item.dry_run,
+                        started_at=item.started_at,
+                        finished_at=item.finished_at,
+                        policy_decision_id=(
+                            str(decision["decision_id"])
+                            if decision.get("decision_id")
+                            else None
+                        ),
+                    )
+                )
+                if item.tool_name.startswith(
+                    (
+                        "query_recent_deployments",
+                        "query_config_changes",
+                        "query_git_commits",
+                        "query_k8s_rollout_history",
+                    )
+                ):
+                    parsed = json.loads(item.output)
+                    change_records.extend(
+                        ChangeRecord.model_validate(record).to_record()
+                        for record in parsed
+                    )
 
             failed_results = [
                 item for item in tool_results if item.status == "failed"
@@ -208,9 +273,12 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 )
             ],
             "pending_tool_calls": [],
+            "runbook_steps": remaining_runbook_steps,
             "approval_decision": None,
             "tool_calls": tool_call_audits,
             "policy_decisions": policy_decisions,
+            "evidence": evidence_records,
+            "change_records": change_records,
             "updated_at": utc_now_iso(),
         }
     except Exception as exc:
@@ -226,8 +294,11 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 )
             ],
             "pending_tool_calls": [],
+            "runbook_steps": remaining_runbook_steps,
             "approval_decision": None,
             "tool_calls": tool_call_audits,
             "policy_decisions": policy_decisions,
+            "evidence": evidence_records,
+            "change_records": change_records,
             "updated_at": utc_now_iso(),
         }

@@ -1,0 +1,20 @@
+id: cpu_high_usage
+version: 1.0.0
+name: CPU high usage diagnosis
+trigger:
+  alert_name: HighCPUUsage
+  severity: warning
+steps:
+  - id: query_alert
+    tool: query_prometheus_alerts
+    risk_level: read_only
+  - id: query_cpu
+    tool: query_cpu_metrics
+    arguments: {window_minutes: 15}
+    risk_level: read_only
+  - id: query_logs
+    tool: search_log
+    arguments: {window_minutes: 15}
+    risk_level: read_only
+stop_conditions: [no_active_alert, max_steps_reached]
+expected_evidence: [cpu_usage_series, related_error_logs]

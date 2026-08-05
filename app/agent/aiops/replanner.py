@@ -12,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from app.agent.tool_gateway import create_tool_gateway
+from app.agent.evidence import bind_report_to_evidence
 from app.config import config
 
 from .history import format_steps_for_prompt, format_steps_markdown
@@ -235,6 +236,7 @@ async def _generate_response(state: IncidentState, llm: ChatQwen) -> dict[str, A
 
     input_text = state.get("input", "")
     past_steps = state.get("past_steps", [])
+    evidence = list(state.get("evidence", []))
 
     # 格式化执行历史
     execution_history = format_steps_markdown(past_steps)
@@ -257,6 +259,7 @@ async def _generate_response(state: IncidentState, llm: ChatQwen) -> dict[str, A
             # 如果返回的是字典
             final_response = response_obj.get("response", "")  # type: ignore
 
+        final_response = bind_report_to_evidence(final_response, evidence)
         logger.info(f"最终响应生成完成，长度: {len(final_response)}")
 
         return {
@@ -280,6 +283,10 @@ async def _generate_response(state: IncidentState, llm: ChatQwen) -> dict[str, A
 ## 说明
 由于系统异常，无法生成完整响应。以上是已收集的信息。
 """
+        fallback_response = bind_report_to_evidence(
+            fallback_response,
+            evidence,
+        )
         return {
             "response": fallback_response,
             "status": "completed",

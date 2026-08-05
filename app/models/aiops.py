@@ -35,6 +35,10 @@ class AIOpsRequest(BaseModel):
         default_factory=default_agent_identity,
         description="执行诊断的 Agent 身份与权限范围",
     )
+    alert: dict[str, Any] | None = Field(
+        default=None,
+        description="可选的结构化告警，用于匹配 Runbook",
+    )
 
 
 class ApprovalDecisionRequest(BaseModel):

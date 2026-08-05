@@ -50,6 +50,10 @@ DEFAULT_READ_ONLY_TOOL_NAMES = frozenset(
         "search_log",
         "query_cpu_metrics",
         "query_memory_metrics",
+        "query_recent_deployments",
+        "query_config_changes",
+        "query_git_commits",
+        "query_k8s_rollout_history",
     }
 )
 

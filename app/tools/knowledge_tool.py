@@ -1,5 +1,7 @@
 """知识检索工具 - 从向量数据库中检索相关信息"""
 
+from hashlib import sha256
+
 from typing import List, Tuple
 
 from langchain_core.documents import Document
@@ -64,6 +66,10 @@ def format_docs(docs: List[Document]) -> str:
         # 提取元数据
         metadata = doc.metadata
         source = metadata.get("_file_name", "未知来源")
+        chunk_id = metadata.get("chunk_id") or doc.id
+        if not chunk_id:
+            digest_source = f"{source}\n{doc.page_content}".encode("utf-8")
+            chunk_id = sha256(digest_source).hexdigest()[:16]
         
         # 提取标题信息 (如果有)
         headers = []
@@ -74,7 +80,7 @@ def format_docs(docs: List[Document]) -> str:
         header_str = " > ".join(headers) if headers else ""
         
         # 构建格式化文本
-        formatted = f"【参考资料 {i}】"
+        formatted = f"【参考资料 {i}】 [doc:{chunk_id}]"
         if header_str:
             formatted += f"\n标题: {header_str}"
         formatted += f"\n来源: {source}"

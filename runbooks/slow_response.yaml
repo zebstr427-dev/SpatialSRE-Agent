@@ -1,0 +1,19 @@
+id: slow_response
+version: 1.0.0
+name: Slow response diagnosis
+trigger:
+  alert_name: HighLatency
+steps:
+  - id: query_latency
+    tool: query_prometheus_alerts
+    risk_level: read_only
+  - id: query_logs
+    tool: search_log
+    arguments: {window_minutes: 20}
+    risk_level: read_only
+  - id: query_changes
+    tool: query_recent_deployments
+    arguments: {window_minutes: 30}
+    risk_level: read_only
+stop_conditions: [max_steps_reached]
+expected_evidence: [latency_series, slow_request_logs, recent_changes]

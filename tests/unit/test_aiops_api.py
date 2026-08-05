@@ -26,6 +26,7 @@ class FakeAIOpsService:
         incident_id: str | None = None,
         trace_id: str | None = None,
         identity: AgentIdentity | None = None,
+        alert: dict[str, object] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         self.diagnose_calls.append(
             {
@@ -33,6 +34,7 @@ class FakeAIOpsService:
                 "incident_id": incident_id,
                 "trace_id": trace_id,
                 "identity": identity,
+                "alert": alert,
             }
         )
         yield {

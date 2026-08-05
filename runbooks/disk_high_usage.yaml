@@ -1,0 +1,16 @@
+id: disk_high_usage
+version: 1.0.0
+name: Disk high usage diagnosis
+trigger:
+  alert_name: DiskHighUsage
+  severity: warning
+steps:
+  - id: query_alert
+    tool: query_prometheus_alerts
+    risk_level: read_only
+  - id: query_logs
+    tool: search_log
+    arguments: {window_minutes: 30}
+    risk_level: read_only
+stop_conditions: [max_steps_reached]
+expected_evidence: [disk_usage_series, large_file_logs]

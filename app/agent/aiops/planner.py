@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.tool_gateway import create_tool_gateway
 from app.config import config
+from app.runbooks import RunbookRegistry
 from app.tools import retrieve_knowledge
 
 from .state import IncidentState, utc_now_iso
@@ -74,6 +75,31 @@ async def planner(state: IncidentState) -> dict[str, Any]:
 
     input_text = state.get("input", "")
     logger.info(f"用户输入: {input_text}")
+
+    alert = state.get("alert", {})
+    alert_name = alert.get("alert_name")
+    if isinstance(alert_name, str) and alert_name:
+        matched = RunbookRegistry.default().match(
+            alert_name=alert_name,
+            severity=(
+                str(alert["severity"])
+                if alert.get("severity") is not None
+                else None
+            ),
+        )
+        if matched is not None:
+            runbook_steps = [step.to_record() for step in matched.steps]
+            return {
+                "runbook_id": matched.id,
+                "runbook_version": matched.version,
+                "runbook_steps": runbook_steps,
+                "plan": [
+                    f"Runbook {matched.id}: {step.id} using {step.tool}"
+                    for step in matched.steps
+                ],
+                "status": "running",
+                "updated_at": utc_now_iso(),
+            }
 
     try:
         # 步骤1: 查询内部文档获取相关经验
@@ -141,6 +167,9 @@ async def planner(state: IncidentState) -> dict[str, Any]:
             logger.info(f"  步骤{i}: {step}")
 
         return {
+            "runbook_id": None,
+            "runbook_version": None,
+            "runbook_steps": [],
             "plan": plan_steps,
             "status": "running",
             "updated_at": utc_now_iso(),
@@ -150,6 +179,9 @@ async def planner(state: IncidentState) -> dict[str, Any]:
         logger.error(f"生成计划失败: {e}", exc_info=True)
         # 返回一个默认计划
         return {
+            "runbook_id": None,
+            "runbook_version": None,
+            "runbook_steps": [],
             "plan": [
                 "收集相关信息",
                 "分析数据",

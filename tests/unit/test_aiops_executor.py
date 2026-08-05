@@ -363,3 +363,84 @@ async def test_executor_rejection_never_invokes_pending_tool(
     assert "rejected" in result["past_steps"][0]["result"]
     assert result["pending_tool_calls"] == []
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_executor_uses_exact_runbook_tool_and_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[dict] = []
+
+    async def metrics(service: str, window_minutes: int) -> str:
+        received.append(
+            {"service": service, "window_minutes": window_minutes}
+        )
+        return "cpu=95%"
+
+    _patch_runtime(
+        monkeypatch,
+        first_response=AIMessage(content="runbook step summarized"),
+        tools=[_tool("query_cpu_metrics", metrics)],
+    )
+    state = _state_with_plan("Runbook cpu_high_usage: query_cpu")
+    state["alert"] = {
+        "alert_name": "HighCPUUsage",
+        "service": "checkout",
+    }
+    state["runbook_id"] = "cpu_high_usage"
+    state["runbook_steps"] = [
+        {
+            "id": "query_cpu",
+            "tool": "query_cpu_metrics",
+            "arguments": {"window_minutes": 15},
+            "risk_level": "read_only",
+            "continue_on_failure": False,
+        }
+    ]
+
+    result = await executor_module.executor(state)
+
+    assert received == [{"service": "checkout", "window_minutes": 15}]
+    assert result["runbook_steps"] == []
+    assert result["past_steps"][0]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_executor_persists_structured_change_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def changes(service: str) -> str:
+        return json.dumps(
+            [
+                {
+                    "change_id": "deploy-1",
+                    "service": service,
+                    "change_type": "deployment",
+                    "timestamp": "2026-08-05T01:55:00+00:00",
+                    "environment": "production",
+                    "summary": "deployed v2",
+                }
+            ]
+        )
+
+    _patch_runtime(
+        monkeypatch,
+        first_response=AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-changes",
+                    "name": "query_recent_deployments",
+                    "args": {"service": "checkout"},
+                }
+            ],
+        ),
+        tools=[_tool("query_recent_deployments", changes)],
+    )
+
+    result = await executor_module.executor(
+        _state_with_plan("query checkout changes")
+    )
+
+    assert result["change_records"][0]["change_id"] == "deploy-1"
+    assert result["evidence"][0]["source_type"] == "change"

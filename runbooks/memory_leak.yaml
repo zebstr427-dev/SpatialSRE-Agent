@@ -1,0 +1,17 @@
+id: memory_leak
+version: 1.0.0
+name: Memory leak diagnosis
+trigger:
+  alert_name: HighMemoryUsage
+  severity: warning
+steps:
+  - id: query_memory
+    tool: query_memory_metrics
+    arguments: {window_minutes: 30}
+    risk_level: read_only
+  - id: query_logs
+    tool: search_log
+    arguments: {window_minutes: 30}
+    risk_level: read_only
+stop_conditions: [max_steps_reached]
+expected_evidence: [memory_usage_series, oom_events]

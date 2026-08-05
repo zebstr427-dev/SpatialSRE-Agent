@@ -148,6 +148,7 @@ async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDepe
                 incident_id=incident_id,
                 trace_id=trace_id,
                 identity=request.identity,
+                alert=request.alert,
             ):
                 last_sequence = event.get("sequence", last_sequence)
                 # 发送事件

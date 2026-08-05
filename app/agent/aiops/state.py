@@ -34,6 +34,7 @@ class EvidenceRecord(TypedDict):
     content: str
     collected_at: str
     tool_call_id: NotRequired[str]
+    provenance: NotRequired[dict[str, object]]
 
 
 class ToolCallAuditRecord(TypedDict):
@@ -60,12 +61,17 @@ class IncidentState(TypedDict):
     trace_id: str
     session_id: str
     identity: dict[str, object]
+    alert: dict[str, object]
     severity: IncidentSeverity
+    runbook_id: str | None
+    runbook_version: str | None
+    runbook_steps: list[dict[str, object]]
     plan: list[str]
     past_steps: Annotated[list[ExecutedStep], operator.add]
     evidence: Annotated[list[EvidenceRecord], operator.add]
     tool_calls: Annotated[list[ToolCallAuditRecord], operator.add]
     policy_decisions: Annotated[list[dict[str, object]], operator.add]
+    change_records: Annotated[list[dict[str, object]], operator.add]
     pending_tool_calls: list[dict[str, object]]
     approval_requests: list[dict[str, object]]
     approval_decision: dict[str, object] | None
@@ -149,6 +155,7 @@ def create_incident_state(
     trace_id: str | None = None,
     severity: IncidentSeverity = "unknown",
     identity: AgentIdentity | None = None,
+    alert: dict[str, object] | None = None,
 ) -> IncidentState:
     """Create a complete initial state using checkpoint-safe primitive values."""
 
@@ -160,12 +167,17 @@ def create_incident_state(
         "trace_id": trace_id or uuid4().hex,
         "session_id": session_id,
         "identity": resolved_identity.to_record(),
+        "alert": dict(alert or {}),
         "severity": severity,
+        "runbook_id": None,
+        "runbook_version": None,
+        "runbook_steps": [],
         "plan": [],
         "past_steps": [],
         "evidence": [],
         "tool_calls": [],
         "policy_decisions": [],
+        "change_records": [],
         "pending_tool_calls": [],
         "approval_requests": [],
         "approval_decision": None,
