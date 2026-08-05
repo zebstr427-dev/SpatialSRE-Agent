@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import operator
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Annotated, Any, Literal, TypedDict
 from uuid import uuid4
@@ -14,12 +14,12 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.evidence import bind_report_to_evidence, validate_incident_input
+from app.change_intelligence import correlate_changes, default_change_repository
 from app.incident_graph import GraphEdge, GraphNode, NetworkXIncidentGraph
 from app.incident_graph.graphrag import GraphRAGRetriever
 from app.observability import finish_agent_span, start_agent_span
-from app.retrieval.hybrid import DocumentChunk
+from app.retrieval.hybrid import DocumentChunk, HybridRetriever
 from app.runbooks import RunbookRegistry
-
 
 RoleStatus = Literal["succeeded", "failed"]
 
@@ -209,11 +209,19 @@ class EnterpriseIncidentWorkflow:
             changes = state.get("change_records", [])
             summary = hint
             if changes and hint != "insufficient evidence":
-                first = changes[0]
-                service = first.get("service")
-                version = first.get("version")
-                if service and version:
-                    summary = f"{hint} after {service} {version} rollout"
+                versioned_change = next(
+                    (
+                        item
+                        for item in changes
+                        if item.get("service") and item.get("version")
+                    ),
+                    None,
+                )
+                if versioned_change:
+                    summary = (
+                        f"{hint} after {versioned_change['service']} "
+                        f"{versioned_change['version']} rollout"
+                    )
             return {
                 "root_cause": {
                     "summary": summary,
@@ -432,28 +440,51 @@ def build_default_agents() -> dict[str, AgentRoleRunner]:
 
     async def change(state: dict[str, Any]) -> RoleOutput:
         service = str(state["alert"].get("service", "unknown"))
-        record = {
-            "change_id": f"deploy-{service}-v2",
-            "service": service,
-            "change_type": "deployment",
-            "timestamp": "2026-08-05T01:42:00+00:00",
-            "environment": "production",
-            "summary": f"{service} v2 rollout",
-            "version": "v2",
-        }
+        incident_at = datetime.fromisoformat(
+            str(
+                state["alert"].get("started_at")
+                or datetime.now(UTC).isoformat()
+            )
+        )
+        window = timedelta(minutes=30)
+        records = default_change_repository().query(
+            service=service,
+            start=incident_at - window,
+            end=incident_at + window,
+        )
+        correlated = correlate_changes(
+            records,
+            incident_time=incident_at,
+            service=service,
+            window_minutes=30,
+        )
+        correlated_records = []
+        for item in correlated:
+            record = item.change.to_record()
+            record.update(
+                {
+                    "correlation_score": item.score,
+                    "correlation_reasons": list(item.reasons),
+                    "time_delta_seconds": item.time_delta_seconds,
+                }
+            )
+            correlated_records.append(record)
         evidence = (
             {
-                "evidence_id": "change-payment-v2",
+                "evidence_id": "change-payment-correlation",
                 "source_type": "change",
                 "source": "query_recent_deployments",
-                "content": f"{service} v2 deployed 8 minutes before alert",
+                "content": (
+                    f"correlated changes for {service}: "
+                    f"{[item['change_id'] for item in correlated_records]}"
+                ),
                 "collected_at": datetime.now(UTC).isoformat(),
             },
         )
         return _role_output(
             "change",
             "recent changes correlated",
-            data={"correlated_changes": [record], "correlation_score": 0.93},
+            data={"correlated_changes": correlated_records},
             evidence=evidence,
         )
 
@@ -517,4 +548,8 @@ def _build_demo_graph_retriever() -> GraphRAGRetriever:
             version="1.0.0",
         )
     ]
-    return GraphRAGRetriever(graph, documents=documents)
+    return GraphRAGRetriever(
+        graph,
+        documents=documents,
+        hybrid_retriever=HybridRetriever(documents),
+    )

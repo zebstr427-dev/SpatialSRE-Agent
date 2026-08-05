@@ -1,5 +1,6 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from app.agent.aiops.planner import planner
 from app.agent.aiops.state import create_incident_state

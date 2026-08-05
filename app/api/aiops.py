@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.aiops.state import utc_now_iso
 from app.agent.enterprise_workflow import EnterpriseIncidentWorkflow
+from app.agent.evidence import InputGuardrailError
 from app.models.aiops import (
     AIOpsRequest,
     ApprovalDecisionRequest,
@@ -243,9 +244,12 @@ async def run_enterprise_incident(
 ) -> dict[str, Any]:
     """Run the deterministic structured multi-agent incident workflow."""
 
-    return await workflow.run(
-        request.input,
-        alert=request.alert,
-        incident_id=request.incident_id,
-        trace_id=request.trace_id,
-    )
+    try:
+        return await workflow.run(
+            request.input,
+            alert=request.alert.model_dump(mode="json", exclude_none=True),
+            incident_id=request.incident_id,
+            trace_id=request.trace_id,
+        )
+    except InputGuardrailError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

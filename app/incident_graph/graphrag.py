@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.incident_graph.models import GraphEdge, GraphNode
 from app.incident_graph.store import NetworkXIncidentGraph
-from app.retrieval.hybrid import DocumentChunk
+from app.retrieval.hybrid import DocumentChunk, HybridRetriever
 
 
 def _tokens(value: str) -> set[str]:
@@ -37,9 +37,11 @@ class GraphRAGRetriever:
         graph: NetworkXIncidentGraph,
         *,
         documents: Sequence[DocumentChunk] = (),
+        hybrid_retriever: HybridRetriever | None = None,
     ) -> None:
         self.graph = graph
         self.documents = list(documents)
+        self.hybrid_retriever = hybrid_retriever
 
     def retrieve(
         self,
@@ -64,18 +66,27 @@ class GraphRAGRetriever:
             for edge in self.graph.edges()
             if edge.source in neighborhood_ids and edge.target in neighborhood_ids
         )
-        ranked_documents = sorted(
-            self.documents,
-            key=lambda item: (
-                -len(query_tokens & _tokens(item.content)),
-                item.chunk_id,
-            ),
-        )
-        documents = tuple(
-            item
-            for item in ranked_documents
-            if query_tokens & _tokens(item.content)
-        )[:top_k_documents]
+        if self.hybrid_retriever is not None:
+            documents = tuple(
+                item.chunk
+                for item in self.hybrid_retriever.search(
+                    query,
+                    top_k=top_k_documents,
+                )
+            )
+        else:
+            ranked_documents = sorted(
+                self.documents,
+                key=lambda item: (
+                    -len(query_tokens & _tokens(item.content)),
+                    item.chunk_id,
+                ),
+            )
+            documents = tuple(
+                item
+                for item in ranked_documents
+                if query_tokens & _tokens(item.content)
+            )[:top_k_documents]
         node_types = Counter(node.type.value for node in self.graph.nodes())
         edge_types = Counter(edge.type.value for edge in self.graph.edges())
         citations = tuple(

@@ -5,7 +5,6 @@ from typing import Any
 
 from opentelemetry import trace
 
-
 _TRACER = trace.get_tracer("super-biz-agent")
 
 

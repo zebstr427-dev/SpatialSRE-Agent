@@ -1,6 +1,6 @@
 # Fixed P0-P3 Curriculum
 
-This is the single source of truth for lesson numbering and scope. The curriculum has 31 lessons numbered 0-30. Lessons 0-15 are accepted; 15 lessons remain beginning with lesson 16.
+This is the single source of truth for lesson numbering and scope. The curriculum has 31 lessons numbered 0-30. All lessons are accepted after the P0-P3 implementation and full verification completed on 2026-08-05.
 
 ## Stage Totals
 
@@ -8,9 +8,9 @@ This is the single source of truth for lesson numbering and scope. The curriculu
 | --- | ---: | ---: | --- |
 | P0 Production Agent Foundation | 10 | 0 | 0-9 |
 | P1 Controlled Enterprise Execution | 6 | 0 | 10-15 |
-| P2 AIOps Root-Cause Enhancement | 0 | 6 | 16-21 |
-| P3 High-Barrier Capabilities | 0 | 9 | 22-30 |
-| Total | 16 | 15 | 0-30 |
+| P2 AIOps Root-Cause Enhancement | 6 | 0 | 16-21 |
+| P3 High-Barrier Capabilities | 9 | 0 | 22-30 |
+| Total | 31 | 0 | 0-30 |
 
 ## Accepted Work
 
@@ -18,7 +18,13 @@ Lessons 0-9 cover the runnable baseline, pytest baseline, dependency upgrade, ty
 
 Lessons 10-15 establish the P1 controlled execution plane: unified Tool Gateway, fail-closed risk and dry-run enforcement, Agent Identity, versioned Policy-as-Code, durable human approval, and evidence-bound output guardrails.
 
-## Remaining Lessons
+Lessons 16-21 establish P2 root-cause enhancement: versioned Runbook-as-Code, runbook-first planning, explainable Change Intelligence, Hybrid RAG, rerank, metadata filters, stable citations, and retrieval evaluation.
+
+Lessons 22-30 establish P3 high-barrier capabilities: Incident Graph queries, Hybrid GraphRAG, isolated Failure Replay and metrics, structured LangGraph orchestration, parallel failure isolation, five in-project Agent roles, OpenTelemetry AgentOps, a typed API, and the deterministic final demo.
+
+Final verification: `115` non-PostgreSQL tests, `2` PostgreSQL integration tests, `117` tests in the complete suite, and `64.34%` total application coverage.
+
+## Accepted Lessons 16-30
 
 | Stage | Lesson | Title | Fixed feature points |
 | --- | ---: | --- | --- |

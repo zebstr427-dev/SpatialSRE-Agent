@@ -2,6 +2,7 @@
 AIOps 请求和响应模型
 """
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,11 +50,23 @@ class ApprovalDecisionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class EnterpriseAlert(BaseModel):
+    """Validated alert envelope used by the enterprise workflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alert_name: str = Field(min_length=1, max_length=128)
+    service: str = Field(min_length=1, max_length=128)
+    severity: str = Field(default="unknown", min_length=1, max_length=32)
+    started_at: datetime | None = None
+    environment: str = Field(default="production", min_length=1, max_length=64)
+
+
 class EnterpriseIncidentRequest(BaseModel):
     """Request for the structured enterprise incident workflow."""
 
     input: str = Field(min_length=1, max_length=10_000)
-    alert: dict[str, Any]
+    alert: EnterpriseAlert
     incident_id: str | None = Field(default=None, min_length=1, max_length=128)
     trace_id: str | None = Field(default=None, min_length=1, max_length=128)
 
