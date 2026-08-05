@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "PyYAML>=6.0.2,<7",
     "networkx>=3.4,<4",
+    "opentelemetry-api>=1.39,<2",
     "langchain-milvus>=0.3.3",
     "langchain-text-splitters>=1.1.0",
     "langchain-mcp-adapters>=0.2.1",
