@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Continue"
 
-$repositoryPath = "C:\zyh\OnCallAgent\Python-super_biz_agent_py-release-2026-05-17\super_biz_agent_py-release-2026-05-17"
+$repositoryPath = "C:\zyh\OnCallAgent\Python-super_biz_agent_py-release-2026-05-17\SpatialSRE-Agent"
 $logPath = Join-Path $repositoryPath ".git\auto-sync.log"
 $lockPath = Join-Path $repositoryPath ".git\auto-sync.lock"
 $env:GIT_TERMINAL_PROMPT = "0"

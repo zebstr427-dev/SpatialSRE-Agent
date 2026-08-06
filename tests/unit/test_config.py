@@ -4,6 +4,12 @@ from pydantic import ValidationError
 from app.config import Settings
 
 
+def test_default_application_branding() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.app_name == "SpatialSRE-Agent"
+
+
 def test_checkpoint_database_url_is_secret_and_has_local_default() -> None:
     settings = Settings(_env_file=None)
 

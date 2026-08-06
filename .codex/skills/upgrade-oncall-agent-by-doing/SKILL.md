@@ -12,7 +12,7 @@ Teach the project as a live pairing exercise. Give one complete lesson packet pe
 Use this project root unless the learner explicitly supplies a relocated clone:
 
 ```text
-C:\zyh\OnCallAgent\Python-super_biz_agent_py-release-2026-05-17\super_biz_agent_py-release-2026-05-17
+C:\zyh\OnCallAgent\Python-super_biz_agent_py-release-2026-05-17\SpatialSRE-Agent
 ```
 
 Treat these files as sources of truth:

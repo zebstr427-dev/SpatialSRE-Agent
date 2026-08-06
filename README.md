@@ -1,4 +1,4 @@
-# SuperBizAgent
+# SpatialSRE-Agent
 
 > 企业级智能对话和运维助手，支持 RAG 知识库问答和 AIOps 智能诊断
 
@@ -37,8 +37,8 @@ PostgreSQL Durable Runtime 的实现原理、复现命令和面试问答见 [教
 
 ```bash
 # 1. 克隆项目
-git clone <repository_url>
-cd super_biz_agent_py
+git clone git@github.com:zebstr427-dev/SpatialSRE-Agent.git
+cd SpatialSRE-Agent
 
 # 2. 安装依赖（推荐使用 uv）
 # 方式 1: 使用 uv（推荐，更快）
@@ -67,8 +67,8 @@ make start
 
 ```powershell
 # 1. 克隆项目
-git clone <repository_url>
-cd super_biz_agent_py
+git clone git@github.com:zebstr427-dev/SpatialSRE-Agent.git
+cd SpatialSRE-Agent
 
 # 2. 创建虚拟环境并安装依赖
 # 方式 1: 使用 uv（推荐，更快）
@@ -167,7 +167,7 @@ curl -X POST "http://localhost:9900/api/aiops" \
 ## 📁 项目结构
 
 ```
-super_biz_agent_py/
+SpatialSRE-Agent/
 ├── app/                                    # 应用核心
 │   ├── __init__.py                         # 包初始化（自动加载日志配置）
 │   ├── main.py                             # FastAPI 应用入口

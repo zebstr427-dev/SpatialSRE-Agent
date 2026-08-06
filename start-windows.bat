@@ -5,7 +5,7 @@ set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 
 echo ====================================
-echo 启动 SuperBizAgent 服务
+echo 启动 SpatialSRE-Agent 服务
 echo ====================================
 echo.
 
@@ -136,7 +136,7 @@ echo.
 
 REM 启动 FastAPI 服务
 echo [7/8] 启动 FastAPI 服务...
-start "SuperBizAgent API" %PYTHON_CMD% -m app.run
+start "SpatialSRE-Agent API" %PYTHON_CMD% -m app.run
 echo [信息] 等待服务启动（15秒）...
 timeout /t 15 /nobreak >nul
 echo.

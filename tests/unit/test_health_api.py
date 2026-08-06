@@ -29,6 +29,7 @@ async def test_health_is_healthy_when_milvus_is_connected(monkeypatch: pytest.Mo
     payload = json.loads(response.body)
 
     assert response.status_code == 200
+    assert payload["data"]["service"] == "SpatialSRE-Agent"
     assert payload["data"]["status"] == "healthy"
     assert payload["data"]["milvus"]["status"] == "connected"
     assert payload["data"]["checkpoint_store"]["status"] == "connected"
