@@ -8,7 +8,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-336791.svg)](https://www.postgresql.org/)
 [![Tests](https://img.shields.io/badge/baseline-117%20passed-brightgreen.svg)](docs/learning/README.md)
 
-SpatialSRE-Agent 将传统的 RAG + AIOps Demo 升级为 Incident Response Agent Platform：以 `incident_id` 隔离故障，以 PostgreSQL checkpoint 保存 LangGraph 状态，通过统一 Tool Gateway 执行工具，并在同一链路中提供身份、策略、审批、证据、回放和 AgentOps 数据。
+SpatialSRE-Agent 将传统的 RAG + AIOps 原型升级为 Incident Response Agent Platform：以 `incident_id` 隔离故障，以 PostgreSQL checkpoint 保存 LangGraph 状态，通过统一 Tool Gateway 执行工具，并在同一链路中提供身份、策略、审批、证据、回放和 AgentOps 数据。
 
 ## 核心能力
 
@@ -126,9 +126,9 @@ Windows 也可以使用：
 - OpenAPI：<http://localhost:9900/docs>
 - 健康检查：<http://localhost:9900/health>
 
-## 企业级确定性 Demo
+## 端到端故障响应演示
 
-无需调用 LLM 或外部 MCP，即可运行包含五个 Agent、Runbook、变更关联、GraphRAG、证据和 AgentOps 数据的确定性演示：
+项目提供不依赖 LLM 或外部 MCP 的可复现演示，用于展示五个 Agent 协作、Runbook、变更关联、GraphRAG、证据链和 AgentOps 数据：
 
 ```bash
 uv run python -m app.demo
@@ -229,7 +229,7 @@ uv run pytest -m postgres -q
 # 静态检查
 uv run ruff check app tests
 
-# 确定性企业级验收
+# 端到端故障响应验收
 uv run python -m app.demo
 ```
 
