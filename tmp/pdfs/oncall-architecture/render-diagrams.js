@@ -4,82 +4,208 @@ const path = require('path');
 
 const outputDir = __dirname;
 
+function systemOverviewSvg() {
+  return String.raw`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1080" role="img" aria-labelledby="overview-title overview-desc">
+  <title id="overview-title">SuperBizAgent 系统总览</title>
+  <desc id="overview-desc">普通 Chat 与单一 Durable Incident Runtime，以及只读工具绑定、Tool Gateway、可扩展工具目录和持久化边界。</desc>
+  <foreignObject x="0" y="0" width="1600" height="1080">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="overview">
+      <style>
+        * { box-sizing: border-box; }
+        .overview {
+          width: 1600px; height: 1080px; padding: 24px 30px 22px;
+          background: #f7f9fc; color: #17324d;
+          font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif;
+        }
+        h1 { margin: 0; text-align: center; font-size: 28px; letter-spacing: 1px; }
+        .subtitle { margin: 5px 0 14px; text-align: center; color: #53677a; font-size: 14px; }
+        .layer { border: 1px solid #9fb2c5; border-radius: 12px; background: #ffffff; padding: 10px 14px 12px; margin-top: 9px; }
+        .layer-title { margin-bottom: 8px; color: #315b82; font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+        .row { display: grid; gap: 12px; align-items: stretch; }
+        .access { grid-template-columns: 1fr 1.5fr; }
+        .services { grid-template-columns: 1fr 1fr 1.5fr; }
+        .runtime { grid-template-columns: .92fr 1.15fr 1.35fr 1.15fr .9fr; align-items: center; }
+        .tool-paths { grid-template-columns: .85fr 1.45fr; margin-bottom: 8px; }
+        .providers { grid-template-columns: 1fr 1fr 1.2fr; }
+        .resources { grid-template-columns: repeat(5, 1fr); }
+        .card { min-height: 62px; border: 1.4px solid #5f86ad; border-radius: 8px; background: #e8f1fb; padding: 8px 10px; text-align: center; display: flex; flex-direction: column; justify-content: center; }
+        .card strong { font-size: 15px; line-height: 1.35; }
+        .card span { margin-top: 3px; color: #3f566c; font-size: 12px; line-height: 1.35; }
+        .safe { background: #eef7ef; border-color: #6d9a74; }
+        .warn { background: #fff7e8; border-color: #c28b3c; }
+        .danger { background: #fff0f0; border-color: #b65a5a; }
+        .state { background: #f2ecfb; border-color: #816ca6; }
+        .dark { background: #315b82; border-color: #315b82; color: #ffffff; }
+        .dark span { color: #eaf3fb; }
+        .arrow { display: flex; align-items: center; justify-content: center; color: #53677a; font-size: 24px; font-weight: 700; }
+        .inline-flow { display: grid; grid-template-columns: 1fr 28px 1fr 28px 1fr; gap: 4px; align-items: center; }
+        .stack { display: grid; grid-template-columns: 1fr; gap: 7px; }
+        .contract { margin: 0 auto 8px; width: 64%; }
+        .note { margin-top: 7px; padding: 6px 10px; border-radius: 7px; background: #edf3f8; color: #40576d; font-size: 12px; text-align: center; }
+        .legend { display: flex; justify-content: center; gap: 18px; margin-top: 8px; color: #53677a; font-size: 11px; }
+        .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+      </style>
+
+      <h1>SuperBizAgent 系统总览</h1>
+      <div class="subtitle">普通 Chat 保持轻量只读；所有事故调用汇入单一 Durable Incident Runtime，共享工具治理、审批、证据、审计与 Checkpoint。</div>
+
+      <section class="layer">
+        <div class="layer-title">1. 访问与 FastAPI 接入层</div>
+        <div class="row access">
+          <div class="card"><strong>Web 控制台 / API 调用方</strong><span>聊天、Incident 配置、审批卡片、REST / SSE</span></div>
+          <div class="card dark"><strong>FastAPI App + lifespan</strong><span>/api/chat | /api/upload | /api/aiops | /api/enterprise/incidents | /api/incidents/{id}</span></div>
+        </div>
+      </section>
+
+      <section class="layer">
+        <div class="layer-title">2. 业务入口</div>
+        <div class="row services">
+          <div class="card safe"><strong>RagAgentService</strong><span>独立普通 Chat / RAG；MemorySaver 会话</span></div>
+          <div class="card safe"><strong>知识入库</strong><span>文档切分 -> Embedding -> Milvus</span></div>
+          <div class="card dark"><strong>AIOpsService</strong><span>单一 Durable Incident Runtime；一张持久化 LangGraph</span></div>
+        </div>
+      </section>
+
+      <section class="layer">
+        <div class="layer-title">3. 统一 Incident 父图：Simple / Enterprise 双策略自动路由</div>
+        <div class="row runtime">
+          <div class="card"><strong>Incident Router</strong><span>确定性规则 + 显式策略覆盖</span></div>
+          <div class="card"><strong>Simple</strong><span>Planner / Executor / Replanner / Evidence Assessor</span></div>
+          <div class="card warn"><strong>动态升级</strong><span>Auto 且证据不足时 Simple -> Enterprise；最多一次</span></div>
+          <div class="card"><strong>Enterprise</strong><span>Triage / RAG / SRE / Change / RCA / Remediation / Report</span></div>
+          <div class="card state"><strong>IncidentState v2</strong><span>路由历史、证据、工具审计、报告与 SSE 事件</span></div>
+        </div>
+      </section>
+
+      <section class="layer">
+        <div class="layer-title">4. 工具接入与治理边界</div>
+        <div class="row tool-paths">
+          <div class="stack">
+            <div class="card safe"><strong>Chat Read-only Tool Binding</strong><span>只读 allowlist；不暴露 restart_service 等处置工具</span></div>
+            <div class="note">普通 Chat 可使用本地只读工具和 MCP 只读子集，但不承担生产处置。</div>
+          </div>
+          <div class="inline-flow">
+            <div class="card"><strong>Simple / Enterprise Tool Calls</strong><span>事故策略不直连 Provider</span></div>
+            <div class="arrow">→</div>
+            <div class="card"><strong>Tool Gateway Factory</strong><span>为每次节点调用创建隔离实例</span></div>
+            <div class="arrow">→</div>
+            <div class="card warn"><strong>Tool Gateway Instance</strong><span>Identity / Risk / Policy / Approval / Timeout / Audit</span></div>
+          </div>
+        </div>
+        <div class="card contract"><strong>Tool Catalog / Registration Contract</strong><span>LangChain BaseTool / StructuredTool；本地注册 + MCP 动态发现；下方只是当前示例，不是工具上限</span></div>
+        <div class="row providers">
+          <div class="card safe"><strong>本地只读工具（可扩展）</strong><span>知识检索 / 时间 / 指标 / 变更查询</span></div>
+          <div class="card danger"><strong>受控处置工具</strong><span>restart_service：经 Gateway 审批，始终强制 dry-run</span></div>
+          <div class="card"><strong>MCP 动态工具（可扩展）</strong><span>日志 / 指标 / 变更 / CMDB / 云平台 / 工单等外部 Provider</span></div>
+        </div>
+        <div class="note">Gateway 是治理边界，不是固定工具清单；每次调用统一沉淀 Evidence / Citations / Tool Audit / Policy Decision / Provider Failure。</div>
+      </section>
+
+      <section class="layer">
+        <div class="layer-title">5. 模型、知识与持久化边界</div>
+        <div class="row resources">
+          <div class="card"><strong>DashScope / Qwen</strong><span>Chat、Simple 与 Enterprise 的模型 Provider</span></div>
+          <div class="card"><strong>Milvus</strong><span>普通 RAG + Hybrid Retrieval 向量检索</span></div>
+          <div class="card"><strong>Runbook + Incident Graph</strong><span>确定性 Registry 与版本化快照</span></div>
+          <div class="card"><strong>MemorySaver + localStorage</strong><span>普通 Chat 进程内状态 + 浏览器展示历史</span></div>
+          <div class="card state"><strong>LangGraph Checkpointer</strong><span>PostgreSQL 持久化 Incident 父图；支持审批中断与恢复</span></div>
+        </div>
+      </section>
+
+      <div class="legend">
+        <span><i class="dot" style="background:#eef7ef;border:1px solid #6d9a74"></i>只读 / 轻量链路</span>
+        <span><i class="dot" style="background:#fff7e8;border:1px solid #c28b3c"></i>安全治理边界</span>
+        <span><i class="dot" style="background:#fff0f0;border:1px solid #b65a5a"></i>受控处置</span>
+        <span><i class="dot" style="background:#f2ecfb;border:1px solid #816ca6"></i>持久化状态</span>
+      </div>
+    </div>
+  </foreignObject>
+</svg>`;
+}
+
 const diagrams = {
+  // The overview is rendered by the fixed A3 grid above. This Mermaid source
+  // remains as a searchable semantic reference for the same architecture.
   '01-system-overview': String.raw`
 flowchart TB
-    subgraph U["用户"]
-        Web["Web 控制台<br/>聊天、Incident 配置、审批卡片"]
-        Caller["API 调用方<br/>REST / SSE"]
+    Access["Web 控制台 / API 调用方<br/>聊天、Incident 配置、审批卡片、REST / SSE"]
+    API["FastAPI App + lifespan<br/>/api/chat | /api/upload | /api/aiops<br/>/api/enterprise/incidents | /api/incidents/{id}"]
+
+    subgraph S["业务入口与统一事故 Runtime"]
+        direction LR
+        ChatAgent["RagAgentService<br/>独立普通 Chat / RAG"]
+        IndexPipeline["文档切分 -> Embedding -> Milvus"]
+        Runtime["AIOpsService<br/>单一 Durable Incident Runtime<br/>一张持久化 LangGraph"]
     end
 
-    subgraph A["FastAPI 接入层"]
-        Main["FastAPI lifespan<br/>路由与依赖注入"]
-        ChatAPI["/api/chat<br/>普通问答"]
-        FileAPI["/api/upload<br/>知识入库"]
-        AIOpsAPI["/api/aiops<br/>默认 strategy=auto"]
-        EnterpriseAPI["/api/enterprise/incidents<br/>兼容入口，强制 enterprise"]
-        IncidentAPI["/api/incidents/{id}<br/>状态查询与审批恢复"]
-    end
-
-    subgraph CHAT["独立的普通 RAG 链路"]
-        ChatAgent["RagAgentService<br/>问答与工具调用"]
-        IndexPipeline["切分 -> Embedding -> Milvus"]
-        ChatStore[("MemorySaver / localStorage<br/>Milvus 知识向量")]
-    end
-
-    subgraph RUNTIME["单一 Durable Incident Runtime：AIOpsService"]
+    subgraph G["统一 Incident 父图：双策略自动路由"]
+        direction LR
         Router{"Incident Router<br/>确定性规则 + 显式覆盖"}
-        Simple["Simple 策略<br/>Planner -> Executor -> Replanner"]
-        Assess{"Evidence Assessor<br/>置信度是否 >= 0.60"}
-        Enterprise["Enterprise 策略节点<br/>Triage / RAG / SRE / Change<br/>Root Cause / Remediation / Report"]
+        Simple["Simple<br/>Planner / Executor / Replanner<br/>Evidence Assessor"]
+        Enterprise["Enterprise<br/>Triage / RAG / SRE / Change<br/>Root Cause / Remediation / Report"]
         State["统一 IncidentState v2<br/>节点状态、路由历史、证据与报告"]
+        Events["REST / SSE 输出<br/>routing / escalation / agent_update<br/>approval_required / complete"]
     end
 
-    subgraph CONTROL["两种策略共享的治理边界"]
-        Governance["Tool Gateway Factory<br/>Identity / Risk / Policy / Approval"]
-        Trace["Evidence / Citations / Tool Audit<br/>Provider Failure Isolation"]
-        Checkpoint[("PostgreSQL Checkpoint<br/>每个父图节点后持久化")]
+    subgraph T["工具接入与治理边界"]
+        direction TB
+        ChatBinding["Chat Read-only Tool Binding<br/>只读 allowlist，不暴露处置工具"]
+        IncidentCalls["Simple / Enterprise Tool Calls<br/>所有事故工具调用进入治理边界"]
+        GatewayFactory["Tool Gateway Factory<br/>为节点创建隔离实例"]
+        Gateway["Tool Gateway Instance<br/>Identity / Risk / Policy<br/>Approval / Timeout / Audit"]
+        Catalog["Tool Catalog / Registration Contract<br/>LangChain BaseTool / StructuredTool<br/>本地注册 + MCP 动态发现"]
+        ReadTools["本地只读工具（当前示例，可扩展）<br/>知识 / 时间 / 指标 / 变更查询"]
+        ActionTools["受控处置工具<br/>restart_service：审批 + 强制 dry-run"]
+        MCPTools["MCP 动态工具（当前示例，可扩展）<br/>日志 / 指标 / 变更 / CMDB / 云平台 / 工单等"]
+        Trace["沉淀到 IncidentState<br/>Evidence / Citations / Tool Audit<br/>Policy Decision / Provider Failure"]
     end
 
-    subgraph PROVIDERS["Provider 与知识来源"]
-        Knowledge[("Runbook / Milvus Hybrid RAG<br/>Incident Graph 快照")]
-        Tools["本地工具 / MCP 适配器<br/>日志、指标、变更"]
-        Qwen["DashScope / Qwen"]
+    subgraph P["模型、知识与持久化边界"]
+        direction LR
+        Qwen["Model Provider<br/>DashScope / Qwen"]
+        Milvus[("Milvus<br/>普通 RAG + Hybrid Retrieval")]
+        StaticKnowledge[("确定性知识资源<br/>Runbook Registry<br/>Incident Graph 版本快照")]
+        ChatMemory[("MemorySaver<br/>普通 Chat 进程内会话")]
+        BrowserStore[("localStorage<br/>浏览器展示历史")]
+        Persistence["LangGraph Checkpointer<br/>PostgreSQL Incident Checkpoint"]
     end
 
-    Web --> Main
-    Caller --> Main
-    Main --> ChatAPI
-    Main --> FileAPI
-    Main --> AIOpsAPI
-    Main --> EnterpriseAPI
-    Main --> IncidentAPI
-    ChatAPI --> ChatAgent
-    FileAPI --> IndexPipeline
-    ChatAgent ==> ChatStore
-    IndexPipeline ==> ChatStore
-    ChatAgent --> Qwen
-
-    AIOpsAPI --> Router
-    EnterpriseAPI -->|"requested_strategy=enterprise"| Router
+    Access --> API
+    API -->|"/api/chat"| ChatAgent
+    API -->|"/api/upload"| IndexPipeline
+    API -->|"事故提交 / 查询 / Command resume"| Runtime
+    Runtime --> Router
     Router -->|"simple"| Simple
     Router -->|"enterprise"| Enterprise
-    Simple --> Assess
-    Assess -->|"证据充分"| State
-    Assess -->|"auto 且不足，最多升级一次"| Enterprise
+    Simple -.->|"auto 且证据不足，最多升级一次"| Enterprise
+    Simple --> State
     Enterprise --> State
-    IncidentAPI -.->|"查询 / Command resume"| State
-    State ==> Checkpoint
-    Simple --> Governance
-    Enterprise --> Governance
-    Governance --> Tools
-    Governance --> Trace
-    Trace --> State
-    Enterprise --> Knowledge
-    Knowledge --> Trace
+    State --> Events
+
+    ChatAgent --> ChatBinding
+    ChatBinding -.->|"遵循统一 Tool 契约"| Catalog
+    ChatBinding -->|"本地只读子集"| ReadTools
+    ChatBinding -->|"MCP 只读 allowlist"| MCPTools
+    Simple --> IncidentCalls
+    Enterprise --> IncidentCalls
+    IncidentCalls --> GatewayFactory
+    GatewayFactory --> Gateway
+    Gateway --> Catalog
+    Catalog --> ReadTools
+    Catalog --> ActionTools
+    Catalog --> MCPTools
+    Gateway --> Trace
+
+    ChatAgent --> Qwen
     Simple --> Qwen
     Enterprise --> Qwen
-    State -.->|"routing / agent / approval / complete"| Web
+    IndexPipeline ==> Milvus
+    ReadTools -.->|"retrieve_knowledge"| Milvus
+    Enterprise --> StaticKnowledge
+    ChatAgent ==> ChatMemory
+    Access ==> BrowserStore
+    State ==> Persistence
 `,
   '02-chat-knowledge': String.raw`
 flowchart LR
@@ -97,7 +223,7 @@ flowchart LR
         RagAgent["RagAgentService<br/>创建 LangChain Agent"]
         ChatMemory[("MemorySaver<br/>进程内对话状态")]
         LocalTools["本地工具<br/>时间、知识、指标、变更"]
-        MCPTools["MCP 工具<br/>日志和监控能力"]
+        MCPTools["MCP 只读工具<br/>日志和监控能力"]
     end
 
     subgraph KNOWLEDGE["知识入库与检索"]
@@ -353,17 +479,24 @@ async function main() {
   });
 
   for (const [name, code] of Object.entries(diagrams)) {
-    await page.evaluate(async ({ name, code }) => {
-      const mount = document.getElementById('mount');
-      const result = await window.mermaid.render(`diagram-${name}`, code);
-      mount.innerHTML = result.svg;
-      const svg = mount.querySelector('svg');
-      svg.removeAttribute('width');
-      svg.removeAttribute('height');
-      const viewBox = svg.viewBox.baseVal;
-      const targetWidth = Math.min(2300, Math.max(1500, viewBox.width));
-      svg.style.width = `${targetWidth}px`;
-    }, { name, code });
+    if (name === '01-system-overview') {
+      await page.locator('#mount').evaluate((mount, markup) => {
+        mount.innerHTML = markup;
+        mount.querySelector('svg').style.width = '1600px';
+      }, systemOverviewSvg());
+    } else {
+      await page.evaluate(async ({ name, code }) => {
+        const mount = document.getElementById('mount');
+        const result = await window.mermaid.render(`diagram-${name}`, code);
+        mount.innerHTML = result.svg;
+        const svg = mount.querySelector('svg');
+        svg.removeAttribute('width');
+        svg.removeAttribute('height');
+        const viewBox = svg.viewBox.baseVal;
+        const targetWidth = Math.min(2300, Math.max(1500, viewBox.width));
+        svg.style.width = `${targetWidth}px`;
+      }, { name, code });
+    }
 
     const mount = page.locator('#mount');
     const svgMarkup = await mount.locator('svg').evaluate((svg) => svg.outerHTML);
@@ -373,6 +506,27 @@ async function main() {
       type: 'png',
       animations: 'disabled',
     });
+
+    if (name === '01-system-overview') {
+      const pdfPage = await context.newPage();
+      await pdfPage.setContent(`
+        <style>
+          @page { size: A3 landscape; margin: 8mm; }
+          html, body { width: 100%; height: 100%; margin: 0; background: #ffffff; }
+          body { display: flex; align-items: center; justify-content: center; }
+          svg { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; }
+        </style>
+        ${svgMarkup}
+      `, { waitUntil: 'load' });
+      await pdfPage.pdf({
+        path: path.join(outputDir, `${name}.pdf`),
+        format: 'A3',
+        landscape: true,
+        printBackground: true,
+        preferCSSPageSize: true,
+      });
+      await pdfPage.close();
+    }
   }
 
   await browser.close();

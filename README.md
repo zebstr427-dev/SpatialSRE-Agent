@@ -16,7 +16,8 @@ SpatialSRE-Agent 是面向企业故障响应的 Incident Response Agent Platform
 | 领域 | 已落地能力 |
 | --- | --- |
 | Durable Runtime | `incident_id -> thread_id`、PostgreSQL checkpoint、连接池生命周期、跨进程恢复、已完成节点不重复执行 |
-| 受控工具执行 | 本地/MCP 统一 Tool Gateway、调用审计、超时与错误归一、风险等级、强制 dry-run |
+| 受控工具执行 | Incident Runtime 的本地/MCP 调用统一经过 Tool Gateway，提供调用审计、超时与错误归一、风险等级和强制 dry-run |
+| 普通 Chat 最小权限 | 只绑定本地只读工具和 MCP 只读子集，不暴露 `restart_service` 等处置能力 |
 | 身份与策略 | Agent Identity、工具/服务/风险范围、Policy-as-Code、默认拒绝式安全边界 |
 | 人类审批 | 高风险工具调用可中断，审批请求随 checkpoint 持久化，批准或拒绝后恢复原故障流程 |
 | 证据护栏 | 输入校验、真实工具结果转 evidence、稳定 citation、最终报告只能引用可追溯证据 |
@@ -34,6 +35,7 @@ SpatialSRE-Agent 是面向企业故障响应的 Incident Response Agent Platform
 ```mermaid
 flowchart TD
     Chat[/api/chat/] --> NormalRAG[普通 Milvus RAG]
+    NormalRAG --> ChatTools[Chat read-only tool binding]
     AIOps[/api/aiops/] --> Runtime[AIOpsService / Durable Incident Runtime]
     Compat[/api/enterprise/incidents/] -->|强制 enterprise| Runtime
     Runtime --> Router[Incident Router]
@@ -48,7 +50,11 @@ flowchart TD
     RCA -->|execute_remediation| Executor[公共 Executor / Approval]
     Runtime --> Shared[Checkpoint + Tool Gateway + Policy + Audit]
     Shared --> PG[(PostgreSQL checkpoints)]
-    Shared --> Tools[Local tools / MCP adapters]
+    Shared --> Catalog[Tool catalog / registration contract]
+    ChatTools -->|只读 allowlist| Catalog
+    Catalog --> LocalTools[本地只读工具，可扩展]
+    Catalog --> Actions[受控处置工具]
+    Catalog --> MCP[MCP 动态工具，可扩展]
     Enterprise --> Knowledge[Runbook + Hybrid RAG + Incident Graph snapshot]
 ```
 
@@ -255,7 +261,7 @@ uv run pyright app
 - 非 PostgreSQL：`130 passed`
 - PostgreSQL 集成测试：`2 passed`
 - 完整测试集：`132 passed`
-- 应用代码覆盖率：`66.42%`
+- 应用代码覆盖率基线：`不低于 66.42%`
 - Ruff：`0 errors`
 - Pyright：`0 errors`
 

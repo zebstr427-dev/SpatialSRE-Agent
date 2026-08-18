@@ -27,7 +27,7 @@ from app.agent.mcp_client import (
     suggest_mcp_transport,
 )
 from app.config import config
-from app.tools import DEFAULT_LOCAL_AGENT_TOOLS
+from app.tools import CHAT_READONLY_TOOLS, select_read_only_tools
 
 # 阿里千问大模型和langchain集成参考： https://docs.langchain.com/oss/python/integrations/chat/qwen
 # 注意：需要配置环境变量 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1 否则默认访问的是新加坡站点
@@ -100,8 +100,9 @@ class RagAgentService:
             streaming=streaming,
         )
 
-        # 定义基础工具（与 AIOps Planner/Executor 使用同一套默认本地工具）
-        self.tools = list(DEFAULT_LOCAL_AGENT_TOOLS)
+        # 普通 Chat 是轻量问答入口，只绑定只读工具。处置类工具只能由
+        # Durable Incident Runtime 经 Tool Gateway 调用。
+        self.tools = list(CHAT_READONLY_TOOLS)
 
         # MCP 客户端（延迟初始化，使用全局管理）
         self.mcp_tools: list = []
@@ -136,8 +137,13 @@ class RagAgentService:
             )
             self.mcp_tools = []
         else:
-            self.mcp_tools = mcp_tools
-            logger.info(f"成功加载 {len(mcp_tools)} 个 MCP 工具")
+            self.mcp_tools = list(select_read_only_tools(mcp_tools))
+            blocked_count = len(mcp_tools) - len(self.mcp_tools)
+            logger.info(
+                "普通 Chat 加载 {} 个只读 MCP 工具，隔离 {} 个未知或非只读工具",
+                len(self.mcp_tools),
+                blocked_count,
+            )
 
         all_tools = self.tools + self.mcp_tools
 

@@ -15,7 +15,7 @@ REPORT = PROJECT_ROOT / "output" / "pdf" / "super-biz-agent-architecture-report.
 PROJECT_GUIDE = PROJECT_ROOT / "output" / "pdf" / "super-biz-agent-project-guide.pdf"
 
 DIAGRAMS = {
-    "01-system-overview.png": "2.1-系统总览.pdf",
+    "01-system-overview.pdf": "2.1-系统总览.pdf",
     "02-chat-knowledge.png": "2.2-普通聊天与知识入库.pdf",
     "03-durable-aiops.png": "2.3-持久化AIOps诊断.pdf",
     "04-enterprise-workflow.png": "2.4-企业多智能体事故分析.pdf",
@@ -80,7 +80,12 @@ def main() -> None:
     COLLECTION.mkdir(parents=True, exist_ok=True)
     if not args.guide_only:
         for source_name, target_name in DIAGRAMS.items():
-            image_to_pdf(HERE / source_name, COLLECTION / target_name, target_name.removesuffix(".pdf"))
+            source = HERE / source_name
+            target = COLLECTION / target_name
+            if source.suffix.lower() == ".pdf":
+                shutil.copy2(source, target)
+            else:
+                image_to_pdf(source, target, target_name.removesuffix(".pdf"))
 
         shutil.copy2(HERE / "01-system-overview.svg", COLLECTION / "完整ai项目流程图.svg")
         shutil.copy2(HERE / "03-durable-aiops.png", COLLECTION / "graph aiops runtime.png")
