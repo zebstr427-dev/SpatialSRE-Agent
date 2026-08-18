@@ -6,9 +6,10 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.x-1f6feb.svg)](https://langchain-ai.github.io/langgraph/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-336791.svg)](https://www.postgresql.org/)
-[![Tests](https://img.shields.io/badge/baseline-117%20passed-brightgreen.svg)](docs/learning/README.md)
+[![Tests](https://img.shields.io/badge/tests-132%20passed-brightgreen.svg)](docs/learning/README.md)
+[![Coverage](https://img.shields.io/badge/coverage-66.42%25-brightgreen.svg)](docs/learning/README.md)
 
-SpatialSRE-Agent 将传统的 RAG + AIOps 原型升级为 Incident Response Agent Platform：以 `incident_id` 隔离故障，以 PostgreSQL checkpoint 保存 LangGraph 状态，通过统一 Tool Gateway 执行工具，并在同一链路中提供身份、策略、审批、证据、回放和 AgentOps 数据。
+SpatialSRE-Agent 是面向企业故障响应的 Incident Response Agent Platform：以 `incident_id` 隔离故障，以 PostgreSQL checkpoint 保存 LangGraph 状态，通过统一 Tool Gateway 执行工具，并在同一链路中提供身份、策略、审批、证据、回放和 AgentOps 数据。
 
 ## 核心能力
 
@@ -26,36 +27,42 @@ SpatialSRE-Agent 将传统的 RAG + AIOps 原型升级为 Incident Response Agen
 | 多 Agent 编排 | Triage、RAG、SRE、Change、Report 五角色，SRE/Change 并行执行并支持失败隔离 |
 | AgentOps | OpenTelemetry span、`trace_id`、角色延迟、成功状态、模型 token 与成本记录 |
 
-基础能力仍包括 Web 对话、SSE 流式响应、文档上传、Milvus 向量检索、DashScope 模型和 MCP 日志/监控工具。
+平台同时提供 Web 对话、SSE 流式响应、文档上传、Milvus 向量检索、DashScope 模型和 MCP 日志/监控工具。
 
 ## 架构
 
 ```mermaid
 flowchart TD
-    Client[Web / API / SSE] --> FastAPI[FastAPI lifespan]
-    FastAPI --> Runtime[CheckpointRuntime]
-    Runtime --> Pool[Psycopg async pool]
-    Pool --> PG[(PostgreSQL checkpoints)]
-    Runtime --> Service[AIOpsService]
-    Service --> Graph[LangGraph incident workflow]
-
-    Graph --> Gateway[Tool Gateway]
-    Gateway --> Control[Identity + Policy + Risk + Approval]
-    Control --> Tools[Local tools / MCP tools]
-    Tools --> Evidence[Audit + Evidence + Citations]
-    Evidence --> Report[Diagnosis report]
-
-    FastAPI --> Enterprise[EnterpriseIncidentWorkflow]
-    Enterprise --> Triage[Triage Agent]
-    Triage --> RAG[RAG Agent]
-    RAG --> SRE[SRE Agent]
-    RAG --> Change[Change Agent]
-    SRE --> Final[Report Agent]
-    Change --> Final
-
-    RAG --> Hybrid[Runbook + Hybrid RAG + GraphRAG]
-    Enterprise --> Ops[AgentOps spans + cost metrics]
+    Chat[/api/chat/] --> NormalRAG[普通 Milvus RAG]
+    AIOps[/api/aiops/] --> Runtime[AIOpsService / Durable Incident Runtime]
+    Compat[/api/enterprise/incidents/] -->|强制 enterprise| Runtime
+    Runtime --> Router[Incident Router]
+    Router -->|simple| Simple[Planner → Executor → Replanner]
+    Simple --> Assessor[Evidence Assessor]
+    Assessor -->|充分| Done[Report / END]
+    Assessor -->|auto 且不足，最多一次| Enterprise[EnterpriseIncidentWorkflow nodes]
+    Router -->|enterprise| Enterprise
+    Enterprise --> Triage[Triage → RAG]
+    Triage --> Parallel[SRE + Change 并行]
+    Parallel --> RCA[Root Cause → Remediation → Report]
+    RCA -->|execute_remediation| Executor[公共 Executor / Approval]
+    Runtime --> Shared[Checkpoint + Tool Gateway + Policy + Audit]
+    Shared --> PG[(PostgreSQL checkpoints)]
+    Shared --> Tools[Local tools / MCP adapters]
+    Enterprise --> Knowledge[Runbook + Hybrid RAG + Incident Graph snapshot]
 ```
+
+`AIOpsService` 只编译这一张 `StateGraph(IncidentState)`。`EnterpriseIncidentWorkflow`
+是父图的企业策略节点提供器；两个 HTTP 故障入口共享同一个
+Checkpointer、Tool Gateway factory、Policy、审批与审计 schema。普通聊天仍独立。
+
+### 路由与成本边界
+
+- 显式 `simple` / `enterprise` 永远覆盖自动判断。
+- `critical`、多服务、要求 GraphRAG/变更关联、或 `high + recent_change` 直接走 Enterprise。
+- 其他 `auto` 请求 Simple 优先；报告缺失、至少两个失败步骤或证据分低于 `0.60` 时最多升级一次。
+- Simple 成本较低；Enterprise 以更多 Provider 调用换取跨指标、日志、变更和依赖图的证据交叉验证。
+- MCP/Milvus 不可用时不生成替代事实：角色失败被隔离，状态为 `completed_with_partial_results`，并写入 `provider_failures`。
 
 关键标识语义：
 
@@ -126,15 +133,18 @@ Windows 也可以使用：
 - OpenAPI：<http://localhost:9900/docs>
 - 健康检查：<http://localhost:9900/health>
 
-## 端到端故障响应演示
+## 可复现运行场景
 
-项目提供不依赖 LLM 或外部 MCP 的可复现演示，用于展示五个 Agent 协作、Runbook、变更关联、GraphRAG、证据链和 AgentOps 数据：
+启动本地服务后，四条 API 脚本可分别复现 Simple、直接 Enterprise、动态升级与审批恢复：
 
-```bash
-uv run python -m app.demo
+```powershell
+.\scripts\demo_simple.ps1
+.\scripts\demo_enterprise.ps1
+.\scripts\demo_escalation.ps1
+.\scripts\demo_approval.ps1
 ```
 
-输出包含 `incident_id`、`trace_id`、角色执行结果、证据、根因、修复建议、最终报告、Agent span 和成本指标。
+仓库默认提供带 `source=sample` provenance 的版本化 Incident Graph 快照与本地 MCP 适配器。运行时以 provenance 区分样例来源和真实 Provider 证据，部署环境可在不改变工作流的情况下替换 Provider。
 
 ## API
 
@@ -146,7 +156,7 @@ uv run python -m app.demo
 | `POST` | `/api/aiops` | 启动 durable AIOps SSE 诊断 |
 | `GET` | `/api/incidents/{incident_id}` | 查询故障的最新持久化状态 |
 | `POST` | `/api/incidents/{incident_id}/approval` | 批准或拒绝等待中的高风险工具调用 |
-| `POST` | `/api/enterprise/incidents` | 运行结构化五角色企业故障工作流 |
+| `POST` | `/api/enterprise/incidents` | 兼容入口；强制 Enterprise 后转发统一 Runtime |
 | `GET` | `/health` | 检查 Milvus 与 checkpoint store 状态 |
 
 ### Durable AIOps
@@ -157,6 +167,9 @@ curl -N -X POST "http://localhost:9900/api/aiops" \
   -d '{
     "session_id": "session-123",
     "incident_id": "incident-payment-cpu-001",
+    "input": "payment 发布后 CPU 持续升高",
+    "strategy": "auto",
+    "execute_remediation": false,
     "alert": {
       "alert_name": "HighCPUUsage",
       "service": "payment",
@@ -208,7 +221,7 @@ app/
 ├── services/              # AIOps、RAG、向量服务
 └── tools/                 # 本地工具与变更/知识/监控工具
 
-docs/learning/             # P0-P3 共 31 个可复现课程与验收记录
+docs/learning/             # 32 份可复现课程与验收记录
 evals/incident_cases.jsonl # 版本化故障评测集
 policies/                  # Policy-as-Code
 runbooks/                  # 版本化 Runbook-as-Code
@@ -228,19 +241,25 @@ uv run pytest -m postgres -q
 
 # 静态检查
 uv run ruff check app tests
+uv run pyright app
 
-# 端到端故障响应验收
-uv run python -m app.demo
+# 四条统一 Runtime 演示
+.\scripts\demo_simple.ps1
+.\scripts\demo_enterprise.ps1
+.\scripts\demo_escalation.ps1
+.\scripts\demo_approval.ps1
 ```
 
-P0-P3 验收基线（2026-08-05）：
+项目验收结果（Python 3.13.15 / PostgreSQL 18.6）：
 
-- 非 PostgreSQL：`115 passed`
+- 非 PostgreSQL：`130 passed`
 - PostgreSQL 集成测试：`2 passed`
-- 完整测试集：`117 passed`
-- 应用代码覆盖率：`64.34%`
+- 完整测试集：`132 passed`
+- 应用代码覆盖率：`66.42%`
+- Ruff：`0 errors`
+- Pyright：`0 errors`
 
-完整的实现过程、测试证据和面试叙事见 [P0-P3 学习路线](docs/learning/README.md)。
+架构原理、测试证据和可复现操作见 [学习与验收文档](docs/learning/README.md)；统一 Runtime 的设计说明见 [Durable Incident Runtime](docs/learning/31-unified-durable-incident-runtime.md)。
 
 ## 主要配置
 

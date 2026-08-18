@@ -11,8 +11,8 @@ from langchain_qwq import ChatQwen
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app.agent.tool_gateway import create_tool_gateway
 from app.agent.evidence import bind_report_to_evidence
+from app.agent.tool_gateway import create_tool_gateway
 from app.config import config
 
 from .history import format_steps_for_prompt, format_steps_markdown

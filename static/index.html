@@ -118,6 +118,44 @@
         </main>
     </div>
 
+    <div class="aiops-panel-backdrop" id="aiopsPanelBackdrop" hidden>
+        <section class="aiops-panel" role="dialog" aria-modal="true" aria-labelledby="aiopsPanelTitle">
+            <div class="aiops-panel-header">
+                <div>
+                    <h2 id="aiopsPanelTitle">Durable Incident Runtime</h2>
+                    <p>自动路由 Simple / Enterprise，共享 Checkpoint、Gateway 与审批。</p>
+                </div>
+                <button class="aiops-panel-close" id="aiopsPanelClose" aria-label="关闭">×</button>
+            </div>
+            <label>故障描述
+                <textarea id="aiopsInput" rows="4" maxlength="10000" placeholder="例如：data-sync-service 发布后 CPU 持续升高"></textarea>
+            </label>
+            <div class="aiops-form-grid">
+                <label>告警名<input id="aiopsAlertName" value="HighCPUUsage" maxlength="128"></label>
+                <label>服务<input id="aiopsService" value="data-sync-service" maxlength="128"></label>
+                <label>严重度
+                    <select id="aiopsSeverity">
+                        <option value="unknown">Unknown</option>
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </label>
+                <label>诊断策略
+                    <select id="aiopsStrategy">
+                        <option value="auto" selected>Auto</option>
+                        <option value="simple">Simple</option>
+                        <option value="enterprise">Enterprise</option>
+                    </select>
+                </label>
+            </div>
+            <label class="aiops-checkbox"><input type="checkbox" id="aiopsExecuteRemediation"> 生成受控处置步骤（仍需审批，仅 dry-run）</label>
+            <p class="aiops-identity-note">当前身份：Observer。可自动执行只读查询，不能批准写操作。</p>
+            <button class="aiops-start-btn" id="aiopsStartBtn">开始诊断</button>
+        </section>
+    </div>
+
     <!-- 加载遮罩层 -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="loading-content">

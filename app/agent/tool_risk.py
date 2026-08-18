@@ -18,24 +18,17 @@ class ToolRiskMetadata:
 
     def __post_init__(self) -> None:
         if self.level is ToolRiskLevel.WRITE:
-            if (
-                self.dry_run_argument is None
-                or not self.dry_run_argument.strip()
-            ):
-                raise ValueError(
-                    "write tools must declare dry_run_argument"
-                )
+            if self.dry_run_argument is None or not self.dry_run_argument.strip():
+                raise ValueError("write tools must declare dry_run_argument")
         elif self.dry_run_argument is not None:
-            raise ValueError(
-                "dry_run_argument is only valid for write tools"
-            )
+            raise ValueError("dry_run_argument is only valid for write tools")
 
 
-READ_ONLY_METADATA = ToolRiskMetadata(
-    level=ToolRiskLevel.READ_ONLY
-)
-HIGH_RISK_METADATA = ToolRiskMetadata(
-    level=ToolRiskLevel.HIGH_RISK
+READ_ONLY_METADATA = ToolRiskMetadata(level=ToolRiskLevel.READ_ONLY)
+HIGH_RISK_METADATA = ToolRiskMetadata(level=ToolRiskLevel.HIGH_RISK)
+RESTART_SERVICE_METADATA = ToolRiskMetadata(
+    level=ToolRiskLevel.WRITE,
+    dry_run_argument="dry_run",
 )
 
 DEFAULT_READ_ONLY_TOOL_NAMES = frozenset(
@@ -67,4 +60,6 @@ def risk_metadata_for(
         return overrides[tool_name]
     if tool_name in DEFAULT_READ_ONLY_TOOL_NAMES:
         return READ_ONLY_METADATA
+    if tool_name == "restart_service":
+        return RESTART_SERVICE_METADATA
     return HIGH_RISK_METADATA

@@ -2,6 +2,7 @@
 AIOps 智能运维接口
 """
 
+import inspect
 import json
 from typing import Annotated, Any
 from uuid import uuid4
@@ -11,7 +12,6 @@ from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
 from app.agent.aiops.state import utc_now_iso
-from app.agent.enterprise_workflow import EnterpriseIncidentWorkflow
 from app.agent.evidence import InputGuardrailError
 from app.models.aiops import (
     AIOpsRequest,
@@ -31,22 +31,6 @@ def get_aiops_service(request: Request) -> AIOpsService:
 
 
 AIOpsServiceDependency = Annotated[AIOpsService, Depends(get_aiops_service)]
-
-
-def get_enterprise_workflow(request: Request) -> EnterpriseIncidentWorkflow:
-    workflow = getattr(request.app.state, "enterprise_workflow", None)
-    if workflow is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Enterprise incident workflow is not initialized",
-        )
-    return workflow
-
-
-EnterpriseWorkflowDependency = Annotated[
-    EnterpriseIncidentWorkflow,
-    Depends(get_enterprise_workflow),
-]
 
 
 @router.post("/aiops")
@@ -165,19 +149,26 @@ async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDepe
     async def event_generator():
         last_sequence = 0
         try:
-            async for event in aiops_service.diagnose(
-                session_id=session_id,
-                incident_id=incident_id,
-                trace_id=trace_id,
-                identity=request.identity,
-                alert=request.alert,
-            ):
+            diagnose_kwargs = {
+                "session_id": session_id,
+                "incident_id": incident_id,
+                "trace_id": trace_id,
+                "identity": request.identity,
+                "alert": request.alert,
+                "user_input": request.input,
+                "strategy": request.strategy,
+                "execute_remediation": request.execute_remediation,
+            }
+            # Preserve compatibility with applications that inject a pre-v2
+            # service implementation while the real runtime accepts all fields.
+            parameters = inspect.signature(aiops_service.diagnose).parameters
+            supported_kwargs = {
+                key: value for key, value in diagnose_kwargs.items() if key in parameters
+            }
+            async for event in aiops_service.diagnose(**supported_kwargs):
                 last_sequence = event.get("sequence", last_sequence)
                 # 发送事件
-                yield {
-                    "event": "message",
-                    "data": json.dumps(event, ensure_ascii=False)
-                }
+                yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
 
                 # 如果是完成或错误事件，结束流
                 if event.get("type") in ["complete", "error"]:
@@ -189,15 +180,18 @@ async def diagnose_stream(request: AIOpsRequest, aiops_service: AIOpsServiceDepe
             logger.error(f"[会话 {session_id}] AIOps 诊断流式响应异常: {e}", exc_info=True)
             yield {
                 "event": "message",
-                "data": json.dumps({
-                    "type": "error",
-                    "stage": "exception",
-                    "message": f"诊断异常: {str(e)}",
-                    "incident_id": incident_id,
-                    "trace_id": trace_id,
-                    "sequence": last_sequence + 1,
-                    "timestamp": utc_now_iso(),
-                }, ensure_ascii=False)
+                "data": json.dumps(
+                    {
+                        "type": "error",
+                        "stage": "exception",
+                        "message": f"诊断异常: {str(e)}",
+                        "incident_id": incident_id,
+                        "trace_id": trace_id,
+                        "sequence": last_sequence + 1,
+                        "timestamp": utc_now_iso(),
+                    },
+                    ensure_ascii=False,
+                ),
             }
 
     return EventSourceResponse(event_generator())
@@ -240,14 +234,40 @@ async def resolve_incident_approval(
 @router.post("/enterprise/incidents")
 async def run_enterprise_incident(
     request: EnterpriseIncidentRequest,
-    workflow: EnterpriseWorkflowDependency,
+    raw_request: Request,
 ) -> dict[str, Any]:
-    """Run the deterministic structured multi-agent incident workflow."""
+    """Compatibility endpoint forced through the shared Enterprise strategy."""
 
     try:
-        return await workflow.run(
+        aiops_service = getattr(raw_request.app.state, "aiops_service", None)
+        if aiops_service is not None:
+            return await aiops_service.execute_to_state(
+                request.input,
+                session_id="enterprise-compat",
+                alert=request.alert.model_dump(mode="json", exclude_none=True),
+                incident_id=request.incident_id,
+                trace_id=request.trace_id,
+                identity=request.identity,
+                strategy="enterprise",
+                execute_remediation=request.execute_remediation,
+            )
+
+        # Transitional compatibility for embedders that have not adopted the
+        # v2 lifespan wiring. The repository's production app never uses it.
+        legacy_workflow = getattr(raw_request.app.state, "enterprise_workflow", None)
+        if legacy_workflow is None:
+            raise HTTPException(status_code=503, detail="AIOps runtime is not initialized")
+        legacy_alert = request.alert.model_dump(mode="json", exclude_none=True)
+        for key in (
+            "affected_services",
+            "recent_change",
+            "requires_graph_analysis",
+            "requires_change_correlation",
+        ):
+            legacy_alert.pop(key, None)
+        return await legacy_workflow.run(
             request.input,
-            alert=request.alert.model_dump(mode="json", exclude_none=True),
+            alert=legacy_alert,
             incident_id=request.incident_id,
             trace_id=request.trace_id,
         )

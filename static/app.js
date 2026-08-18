@@ -98,6 +98,15 @@ class SuperBizAgentApp {
         this.sidebar = document.querySelector('.sidebar');
         this.newChatBtn = document.getElementById('newChatBtn');
         this.aiOpsSidebarBtn = document.getElementById('aiOpsSidebarBtn');
+        this.aiopsPanelBackdrop = document.getElementById('aiopsPanelBackdrop');
+        this.aiopsPanelClose = document.getElementById('aiopsPanelClose');
+        this.aiopsStartBtn = document.getElementById('aiopsStartBtn');
+        this.aiopsInput = document.getElementById('aiopsInput');
+        this.aiopsAlertName = document.getElementById('aiopsAlertName');
+        this.aiopsService = document.getElementById('aiopsService');
+        this.aiopsSeverity = document.getElementById('aiopsSeverity');
+        this.aiopsStrategy = document.getElementById('aiopsStrategy');
+        this.aiopsExecuteRemediation = document.getElementById('aiopsExecuteRemediation');
         
         // 输入区域元素
         this.messageInput = document.getElementById('messageInput');
@@ -130,7 +139,14 @@ class SuperBizAgentApp {
         
         // AI Ops按钮
         if (this.aiOpsSidebarBtn) {
-            this.aiOpsSidebarBtn.addEventListener('click', () => this.triggerAIOps());
+            this.aiOpsSidebarBtn.addEventListener('click', () => this.openAIOpsPanel());
+        }
+        if (this.aiopsPanelClose) this.aiopsPanelClose.addEventListener('click', () => this.closeAIOpsPanel());
+        if (this.aiopsStartBtn) this.aiopsStartBtn.addEventListener('click', () => this.triggerAIOps());
+        if (this.aiopsPanelBackdrop) {
+            this.aiopsPanelBackdrop.addEventListener('click', (event) => {
+                if (event.target === this.aiopsPanelBackdrop) this.closeAIOpsPanel();
+            });
         }
         
         // 模式选择下拉菜单
@@ -1184,7 +1200,16 @@ class SuperBizAgentApp {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    session_id: this.sessionId
+                    session_id: this.sessionId,
+                    input: this.aiopsInput?.value.trim() || null,
+                    strategy: this.aiopsStrategy?.value || 'auto',
+                    execute_remediation: Boolean(this.aiopsExecuteRemediation?.checked),
+                    alert: {
+                        alert_name: this.aiopsAlertName?.value.trim() || 'UnknownAlert',
+                        service: this.aiopsService?.value.trim() || 'unknown',
+                        severity: this.aiopsSeverity?.value || 'unknown',
+                        environment: 'production'
+                    }
                 })
             });
 
@@ -1328,6 +1353,25 @@ class SuperBizAgentApp {
                                             if (loadingMessageElement) {
                                                 this.updateAIOpsStreamContent(loadingMessageElement, fullResponse);
                                             }
+                                        } else if (sseMessage.type === 'routing') {
+                                            const reasons = sseMessage.routing?.reason_codes?.join(', ') || 'explicit';
+                                            fullResponse += `\n🧭 策略 <${sseMessage.selected_strategy}> · ${reasons}\n`;
+                                            this.updateAIOpsStreamContent(loadingMessageElement, fullResponse);
+                                        } else if (sseMessage.type === 'escalation') {
+                                            fullResponse += `\n⬆️ Simple → Enterprise（置信度 ${sseMessage.diagnosis_confidence ?? 0}）\n`;
+                                            this.updateAIOpsStreamContent(loadingMessageElement, fullResponse);
+                                        } else if (sseMessage.type === 'agent_update') {
+                                            const role = sseMessage.agent?.role || sseMessage.stage;
+                                            const status = sseMessage.agent?.status || 'succeeded';
+                                            fullResponse += `\n🤖 ${role}: ${status}\n`;
+                                            if (sseMessage.provider_failures?.length) {
+                                                fullResponse += `⚠️ Provider 降级: ${sseMessage.provider_failures.map(item => item.provider).join(', ')}\n`;
+                                            }
+                                            this.updateAIOpsStreamContent(loadingMessageElement, fullResponse);
+                                        } else if (sseMessage.type === 'approval_required') {
+                                            fullResponse += `\n⏸️ 处置等待审批：${sseMessage.approval?.tool_name || 'write tool'}\n`;
+                                            this.updateAIOpsStreamContent(loadingMessageElement, fullResponse);
+                                            this.renderApprovalCard(loadingMessageElement, sseMessage);
                                         } else if (sseMessage.type === 'report') {
                                             // 处理最终报告事件 - 这是关键！
                                             console.log('AI Ops 最终报告生成，流式输出中...');
@@ -1342,6 +1386,7 @@ class SuperBizAgentApp {
                                             if (sseMessage.response) {
                                                 fullResponse += `\n\n${sseMessage.response}`;
                                             }
+                                            fullResponse += `\n\n策略：${sseMessage.selected_strategy || 'unknown'} · 置信度：${sseMessage.diagnosis_confidence ?? 0}`;
                                             // 使用最终的完整内容更新消息
                                             this.updateAIOpsMessage(loadingMessageElement, fullResponse, []);
                                             return;
@@ -1581,12 +1626,66 @@ class SuperBizAgentApp {
         return div.innerHTML;
     }
 
-    // 触发智能运维（点击智能运维按钮时直接调用）
+    openAIOpsPanel() {
+        if (this.isStreaming) {
+            this.showNotification('请等待当前操作完成', 'warning');
+            return;
+        }
+        if (this.aiopsPanelBackdrop) this.aiopsPanelBackdrop.hidden = false;
+        this.aiopsInput?.focus();
+    }
+
+    closeAIOpsPanel() {
+        if (this.aiopsPanelBackdrop) this.aiopsPanelBackdrop.hidden = true;
+    }
+
+    renderApprovalCard(messageElement, event) {
+        if (!messageElement || messageElement.querySelector('.approval-card')) return;
+        const wrapper = messageElement.querySelector('.message-content-wrapper') || messageElement;
+        const card = document.createElement('div');
+        card.className = 'approval-card';
+        const toolName = this.escapeHtml(event.approval?.tool_name || 'write tool');
+        card.innerHTML = `<strong>人工审批</strong><div>${toolName} 仅会执行 dry-run。</div><div>Observer 身份无审批权限，请由 Operator 通过 API 审批。</div>`;
+        const approve = document.createElement('button');
+        approve.textContent = '批准';
+        approve.disabled = true;
+        approve.title = 'Observer 不能批准写操作';
+        const reject = document.createElement('button');
+        reject.textContent = '拒绝';
+        reject.disabled = true;
+        reject.title = '请由 Operator 通过审批 API 处理';
+        const refresh = document.createElement('button');
+        refresh.textContent = '刷新审批结果';
+        refresh.addEventListener('click', async () => {
+            try {
+                const response = await fetch(`${this.apiBaseUrl}/incidents/${event.incident_id}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const state = await response.json();
+                const requests = state.approval_requests || [];
+                const current = requests.find(item => item.request_id === event.approval?.request_id) || requests.at(-1);
+                if (current?.status === 'approved' || current?.status === 'rejected') {
+                    card.dataset.status = current.status;
+                    card.querySelector('strong').textContent = current.status === 'approved' ? '审批已批准' : '审批已拒绝';
+                    refresh.disabled = true;
+                } else {
+                    refresh.textContent = '仍在等待审批';
+                }
+            } catch (error) {
+                refresh.textContent = `刷新失败：${error.message}`;
+            }
+        });
+        card.append(approve, reject, refresh);
+        wrapper.appendChild(card);
+    }
+
+    // 使用独立配置面板触发智能运维，不复用普通聊天模式。
     async triggerAIOps() {
         if (this.isStreaming) {
             this.showNotification('请等待当前操作完成', 'warning');
             return;
         }
+
+        this.closeAIOpsPanel();
 
         // 新建对话
         this.newChat();

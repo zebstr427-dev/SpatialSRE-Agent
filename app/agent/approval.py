@@ -11,6 +11,7 @@ from uuid import uuid4
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agent.aiops.state import IncidentState
 from app.agent.tool_risk import ToolRiskLevel
 
 
@@ -88,11 +89,7 @@ def resolve_approval_request(
         raise ValueError("approval request is already resolved")
     return request.model_copy(
         update={
-            "status": (
-                ApprovalStatus.APPROVED
-                if decision.approved
-                else ApprovalStatus.REJECTED
-            ),
+            "status": (ApprovalStatus.APPROVED if decision.approved else ApprovalStatus.REJECTED),
             "decided_at": datetime.now(UTC).isoformat(),
             "decided_by": decision.decided_by,
             "reason": decision.reason,
@@ -100,7 +97,7 @@ def resolve_approval_request(
     )
 
 
-async def approval_node(state: dict[str, Any]) -> dict[str, Any]:
+async def approval_node(state: IncidentState) -> dict[str, Any]:
     requests = list(state.get("approval_requests", []))
     pending = next(
         (

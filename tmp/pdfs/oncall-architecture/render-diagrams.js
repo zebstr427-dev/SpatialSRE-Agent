@@ -7,73 +7,79 @@ const outputDir = __dirname;
 const diagrams = {
   '01-system-overview': String.raw`
 flowchart TB
-    subgraph U["用户入口"]
-        Web["Web 前端<br/>聊天、上传文件、触发 AIOps"]
-        Caller["外部调用方<br/>调用 REST 或 SSE API"]
-        Operator["值班人员<br/>查询事故、执行人工审批"]
+    subgraph U["用户"]
+        Web["Web 控制台<br/>聊天、Incident 配置、审批卡片"]
+        Caller["API 调用方<br/>REST / SSE"]
     end
 
-    subgraph A["接入层：FastAPI"]
-        Main["应用入口<br/>路由、静态页面、生命周期"]
-        ChatAPI["聊天接口<br/>/api/chat 与 /api/chat_stream"]
-        FileAPI["文件接口<br/>/api/upload 与目录索引"]
-        AIOpsAPI["持久化运维接口<br/>诊断、状态与审批"]
-        EnterpriseAPI["企业事故接口<br/>/api/enterprise/incidents"]
+    subgraph A["FastAPI 接入层"]
+        Main["FastAPI lifespan<br/>路由与依赖注入"]
+        ChatAPI["/api/chat<br/>普通问答"]
+        FileAPI["/api/upload<br/>知识入库"]
+        AIOpsAPI["/api/aiops<br/>默认 strategy=auto"]
+        EnterpriseAPI["/api/enterprise/incidents<br/>兼容入口，强制 enterprise"]
+        IncidentAPI["/api/incidents/{id}<br/>状态查询与审批恢复"]
     end
 
-    subgraph B["核心业务层"]
-        ChatAgent["RAG Chat Agent<br/>普通对话与知识问答"]
-        IndexPipeline["知识入库流水线<br/>切分、向量化、建索引"]
-        DurableAIOps["持久化 AIOps<br/>Plan-Execute-Replan"]
-        EnterpriseFlow["企业多智能体工作流<br/>结构化事故分析"]
+    subgraph CHAT["独立的普通 RAG 链路"]
+        ChatAgent["RagAgentService<br/>问答与工具调用"]
+        IndexPipeline["切分 -> Embedding -> Milvus"]
+        ChatStore[("MemorySaver / localStorage<br/>Milvus 知识向量")]
     end
 
-    subgraph C["平台能力层"]
-        Gateway["Tool Gateway<br/>风控、审批、重试、审计"]
-        Retrieval["知识检索<br/>向量检索与 Hybrid RAG"]
-        GraphRAG["Incident Graph / GraphRAG<br/>关联服务、变更和历史事故"]
-        Evidence["证据治理<br/>来源、引用和输入防护"]
+    subgraph RUNTIME["单一 Durable Incident Runtime：AIOpsService"]
+        Router{"Incident Router<br/>确定性规则 + 显式覆盖"}
+        Simple["Simple 策略<br/>Planner -> Executor -> Replanner"]
+        Assess{"Evidence Assessor<br/>置信度是否 >= 0.60"}
+        Enterprise["Enterprise 策略节点<br/>Triage / RAG / SRE / Change<br/>Root Cause / Remediation / Report"]
+        State["统一 IncidentState v2<br/>节点状态、路由历史、证据与报告"]
     end
 
-    subgraph D["数据与外部系统"]
-        PostgreSQL[("PostgreSQL<br/>AIOps 检查点")]
-        Milvus[("Milvus<br/>知识文档向量")]
-        FileStore[("本地文件<br/>文档、Runbook、变更、策略")]
-        MemoryState[("进程内状态<br/>MemorySaver 与 NetworkX")]
-        Qwen["DashScope / Qwen<br/>推理与向量化"]
-        MCP["MCP 与 Prometheus<br/>日志、指标、监控工具"]
+    subgraph CONTROL["两种策略共享的治理边界"]
+        Governance["Tool Gateway Factory<br/>Identity / Risk / Policy / Approval"]
+        Trace["Evidence / Citations / Tool Audit<br/>Provider Failure Isolation"]
+        Checkpoint[("PostgreSQL Checkpoint<br/>每个父图节点后持久化")]
+    end
+
+    subgraph PROVIDERS["Provider 与知识来源"]
+        Knowledge[("Runbook / Milvus Hybrid RAG<br/>Incident Graph 快照")]
+        Tools["本地工具 / MCP 适配器<br/>日志、指标、变更"]
+        Qwen["DashScope / Qwen"]
     end
 
     Web --> Main
     Caller --> Main
-    Operator --> Main
     Main --> ChatAPI
     Main --> FileAPI
     Main --> AIOpsAPI
     Main --> EnterpriseAPI
+    Main --> IncidentAPI
     ChatAPI --> ChatAgent
     FileAPI --> IndexPipeline
-    AIOpsAPI --> DurableAIOps
-    EnterpriseAPI --> EnterpriseFlow
+    ChatAgent ==> ChatStore
+    IndexPipeline ==> ChatStore
     ChatAgent --> Qwen
-    ChatAgent --> Retrieval
-    ChatAgent ==> MemoryState
-    IndexPipeline --> Qwen
-    IndexPipeline ==> Milvus
-    IndexPipeline ==> FileStore
-    DurableAIOps --> Qwen
-    DurableAIOps --> Gateway
-    DurableAIOps --> Evidence
-    DurableAIOps ==> PostgreSQL
-    EnterpriseFlow --> Retrieval
-    EnterpriseFlow --> GraphRAG
-    EnterpriseFlow --> Evidence
-    EnterpriseFlow ==> FileStore
-    EnterpriseFlow ==> MemoryState
-    Retrieval ==> Milvus
-    GraphRAG ==> MemoryState
-    Gateway --> MCP
-    DurableAIOps -.->|"SSE 诊断事件"| Web
+
+    AIOpsAPI --> Router
+    EnterpriseAPI -->|"requested_strategy=enterprise"| Router
+    Router -->|"simple"| Simple
+    Router -->|"enterprise"| Enterprise
+    Simple --> Assess
+    Assess -->|"证据充分"| State
+    Assess -->|"auto 且不足，最多升级一次"| Enterprise
+    Enterprise --> State
+    IncidentAPI -.->|"查询 / Command resume"| State
+    State ==> Checkpoint
+    Simple --> Governance
+    Enterprise --> Governance
+    Governance --> Tools
+    Governance --> Trace
+    Trace --> State
+    Enterprise --> Knowledge
+    Knowledge --> Trace
+    Simple --> Qwen
+    Enterprise --> Qwen
+    State -.->|"routing / agent / approval / complete"| Web
 `,
   '02-chat-knowledge': String.raw`
 flowchart LR
@@ -104,7 +110,7 @@ flowchart LR
     end
 
     Qwen["Qwen 模型<br/>理解问题、选择工具、组织答案"]
-    Boundary["边界提示<br/>Chat 工具不经过 Tool Gateway"]
+    Boundary["架构边界<br/>普通聊天不进入 Durable Incident Runtime"]
 
     UI -->|"POST /api/chat"| ChatRoute
     UI -.->|"POST /api/chat_stream"| ChatRoute
@@ -128,103 +134,115 @@ flowchart LR
 `,
   '03-durable-aiops': String.raw`
 flowchart TB
-    Request["AIOps 请求<br/>会话、事故编号、告警、身份"]
-    Guardrail["输入防护<br/>校验并清理事故输入"]
-    State["IncidentState<br/>计划、证据、工具调用、审批状态"]
+    Request["AIOpsRequest<br/>input / alert / identity<br/>strategy / execute_remediation"]
+    State["IncidentState v2<br/>单一父图、统一状态 schema"]
+    Router{"incident_router<br/>显式策略优先；auto 使用确定性规则"}
 
-    subgraph GRAPH["LangGraph：Plan-Execute-Replan"]
-        Planner["Planner<br/>制定诊断步骤"]
-        Executor["Executor<br/>执行当前步骤并收集结果"]
-        NeedApproval{"是否有<br/>待审批工具调用"}
-        Approval["Approval Node<br/>暂停等待人工决定"]
-        Replanner["Replanner<br/>继续、调整计划或形成报告"]
-        Finished{"是否得到<br/>最终响应"}
+    subgraph SIMPLE["Simple 诊断策略"]
+        Planner["planner<br/>生成最小诊断计划"]
+        Executor["executor<br/>逐步调用 Gateway 并沉淀证据"]
+        NeedApproval{"pending_tool_calls?"}
+        Approval["approval<br/>LangGraph interrupt / resume"]
+        Replanner["replanner<br/>继续计划或形成报告"]
+        EvidenceAssessor{"evidence_assessor<br/>置信度、报告与失败步骤"}
     end
 
-    subgraph CONTROL["工具执行控制"]
-        Gateway["Tool Gateway<br/>受控工具统一入口"]
-        Identity["身份范围<br/>工具、服务、风险上限"]
-        Risk["风险分类<br/>只读、写操作、高风险"]
-        Policy["Policy-as-Code<br/>允许、拒绝、要求审批"]
-        ExecuteTool["执行工具<br/>超时、重试、dry-run、审计"]
-        Evidence["证据记录<br/>来源、内容、采集时间"]
+    subgraph ENTERPRISE["Enterprise 诊断策略"]
+        Triage["enterprise_triage"]
+        RAG["enterprise_rag<br/>Runbook / Hybrid / Graph"]
+        SRE["enterprise_sre<br/>日志与指标"]
+        Change["enterprise_change<br/>近期变更关联"]
+        RCA["enterprise_root_cause"]
+        Remediation["enterprise_remediation<br/>建议或结构化执行计划"]
+        Report["enterprise_report"]
     end
 
-    PostgreSQL[("PostgreSQL<br/>按 incident_id 保存检查点")]
-    Human["值班人员<br/>批准或拒绝"]
-    SSE["SSE 事件流<br/>plan、step、approval、complete、error"]
-    Tools["本地工具 / MCP / Prometheus<br/>日志、指标、知识、变更"]
+    subgraph SHARED["共享执行、安全与可恢复性"]
+        Gateway["create_tool_gateway<br/>请求级实例，隔离 audit hook"]
+        Control["Identity -> Risk -> Policy<br/>拒绝 / 审批 / forced dry-run"]
+        Audit["evidence / tool_calls<br/>policy_decisions / routing_history"]
+        PostgreSQL[("PostgreSQL Saver<br/>thread_id = incident_id")]
+    end
 
-    Request --> Guardrail
-    Guardrail --> State
-    State --> Planner
+    Request --> State
+    State --> Router
+    Router -->|"simple：默认低成本"| Planner
+    Router -->|"enterprise：critical / 多服务<br/>GraphRAG / 变更关联 / high+recent_change"| Triage
     Planner --> Executor
     Executor --> Gateway
-    Gateway --> Identity
-    Identity --> Risk
-    Risk --> Policy
-    Policy --> ExecuteTool
-    ExecuteTool --> Tools
-    ExecuteTool --> Evidence
-    Evidence --> Executor
+    Gateway --> Control
+    Control --> Audit
+    Audit --> Executor
     Executor --> NeedApproval
     NeedApproval -->|"不需要"| Replanner
     NeedApproval -->|"需要"| Approval
-    Approval -.->|"interrupt"| Human
-    Human -.->|"审批 API + resume"| Approval
-    Approval --> Executor
-    Replanner --> Finished
-    Finished -->|"还有步骤"| Executor
-    Finished -->|"完成"| SSE
-    Planner ==> PostgreSQL
-    Executor ==> PostgreSQL
-    Approval ==> PostgreSQL
-    Replanner ==> PostgreSQL
-    Planner -.-> SSE
-    Executor -.-> SSE
-    Approval -.-> SSE
+    Approval -->|"批准或拒绝后恢复"| Executor
+    Replanner -->|"仍有计划"| Executor
+    Replanner -->|"已有报告"| EvidenceAssessor
+    EvidenceAssessor -->|">= 0.60 且证据充分"| End["END<br/>completed"]
+    EvidenceAssessor -->|"auto 证据不足<br/>escalation_count < 1"| Triage
+
+    Triage --> RAG
+    RAG -.-> SRE
+    RAG -.-> Change
+    SRE --> RCA
+    Change --> RCA
+    RCA --> Remediation
+    Remediation -->|"仅建议"| Report
+    Remediation -->|"execute_remediation=true"| Executor
+    Executor -->|"Enterprise 计划完成"| Report
+    Report --> EnterpriseEnd["END<br/>completed / completed_with_partial_results"]
+
+    State ==>|"父图在每个节点后保存"| PostgreSQL
 `,
   '04-enterprise-workflow': String.raw`
 flowchart TB
-    API["POST /api/enterprise/incidents<br/>事故描述与告警"]
-    Validate["输入 Guardrail<br/>拒绝空输入和不合规输入"]
-    Triage["Triage Agent<br/>判断影响范围和事故优先级"]
-    RAG["RAG Agent<br/>检索 Runbook、知识和历史事故"]
+    API["/api/aiops strategy=enterprise<br/>或企业兼容入口"]
+    Runtime["AIOpsService<br/>统一父图 + PostgreSQL Checkpoint"]
+    Triage["Triage Agent<br/>影响范围、优先级、调查方向"]
+    RAG["RAG Agent<br/>Runbook / Hybrid RAG / Incident Graph"]
 
     subgraph PARALLEL["并行调查"]
-        SRE["SRE Agent<br/>分析指标、日志和服务关系"]
-        Change["Change Agent<br/>关联近期发布和配置变更"]
+        SRE["SRE Agent<br/>经 Gateway 查询指标与日志"]
+        Change["Change Agent<br/>经 Gateway 查询变更并做关联"]
     end
 
     RootCause["Root Cause<br/>汇总证据并判断可能根因"]
-    Remediation["Remediation<br/>匹配 Runbook 并生成处置动作"]
+    Remediation["Remediation<br/>建议；可选生成公共 Executor 计划"]
     Report["Report Agent<br/>生成结构化事故报告"]
-    Response["JSON 响应<br/>证据、根因、动作和报告"]
+    Response["统一持久化状态 + SSE / JSON<br/>完整或 partial results"]
 
-    Hybrid["Hybrid Retriever<br/>关键词与语义检索融合"]
-    GraphRAG["GraphRAG<br/>扩展服务、变更和事故关系"]
-    Runbooks[("Runbook YAML / JSON<br/>标准处置步骤")]
-    Changes[("Change JSONL<br/>发布和配置变更")]
-    NetworkX[("NetworkX 内存图<br/>事故关系图")]
-    Evidence["Evidence Guardrails<br/>检查证据来源与引用"]
+    Gateway["Tool Gateway Factory<br/>身份、策略、审批、审计"]
+    Hybrid[("Milvus / Hybrid Retriever")]
+    GraphRAG[("版本化 Incident Graph 快照<br/>sample provenance")]
+    Runbooks[("Runbook YAML / JSON")]
+    Providers["MCP Provider<br/>metrics / logs / changes"]
+    Failure["Provider Failure Isolation<br/>记录失败，不伪造事实"]
+    CommonExecutor["公共 Executor / Approval<br/>restart_service 永远 dry_run"]
 
-    API --> Validate
-    Validate --> Triage
+    API --> Runtime
+    Runtime --> Triage
     Triage --> RAG
-    RAG --> Hybrid
-    RAG --> GraphRAG
+    RAG --> Gateway
+    Gateway --> Hybrid
+    Gateway --> GraphRAG
+    Gateway --> Runbooks
     Hybrid ==> Runbooks
-    GraphRAG ==> NetworkX
     RAG -.-> SRE
     RAG -.-> Change
-    Change ==> Changes
+    SRE --> Gateway
+    Change --> Gateway
+    Gateway --> Providers
+    Providers -.->|"单 Provider 失败"| Failure
     SRE -.->|"并行结果汇合"| RootCause
     Change -.->|"并行结果汇合"| RootCause
-    RootCause --> Evidence
-    Evidence --> Remediation
-    Remediation ==> Runbooks
+    Failure --> RootCause
+    RootCause --> Remediation
+    Remediation -->|"execute_remediation=true"| CommonExecutor
+    CommonExecutor --> Report
     Remediation --> Report
     Report --> Response
+    Response ==> Runtime
 `,
   '05-runtime-storage': String.raw`
 flowchart LR
@@ -234,15 +252,16 @@ flowchart LR
         Lifespan["FastAPI lifespan<br/>初始化与释放资源"]
         MilvusConnect["连接 Milvus<br/>加载或创建 biz collection"]
         PGConnect["连接 PostgreSQL<br/>初始化 LangGraph Saver"]
-        InitServices["初始化服务<br/>AIOps 与 EnterpriseWorkflow"]
+        LoadGraph["加载 Incident Graph 快照<br/>保留 source provenance"]
+        InitServices["初始化单一 AIOpsService<br/>注入 Enterprise 节点与 Gateway factory"]
         Ready["应用可用<br/>监听 9900 端口"]
     end
 
     subgraph DATA["运行数据"]
-        PG[("PostgreSQL<br/>持久化 AIOps 状态")]
+        PG[("PostgreSQL<br/>统一 IncidentState 检查点")]
         MV[("Milvus<br/>知识文档向量")]
-        Files[("本地文件<br/>上传、Runbook、变更、策略、评测")]
-        Memory[("进程内内存<br/>Chat MemorySaver、NetworkX")]
+        Files[("版本化文件<br/>Runbook、Graph 快照、策略、评测")]
+        Memory[("进程内内存<br/>普通 Chat MemorySaver")]
         Browser[("浏览器 localStorage<br/>前端聊天历史")]
     end
 
@@ -255,15 +274,17 @@ flowchart LR
     subgraph OPS["测试与观测"]
         Tests["测试体系<br/>unit、integration、eval、replay"]
         Logs["Loguru<br/>应用日志"]
-        OTel["OpenTelemetry Span<br/>已有埋点，未确认 exporter"]
+        OTel["AgentOps / OpenTelemetry<br/>span、成本、角色状态"]
     end
 
     Start --> Uvicorn
     Uvicorn --> Lifespan
     Lifespan --> MilvusConnect
     Lifespan --> PGConnect
+    Lifespan --> LoadGraph
     MilvusConnect --> InitServices
     PGConnect --> InitServices
+    LoadGraph --> InitServices
     InitServices --> Ready
     MilvusConnect ==> MV
     PGConnect ==> PG
@@ -275,7 +296,7 @@ flowchart LR
     Ready --> Prometheus
     Ready --> Logs
     Ready --> OTel
-    Tests -.->|"验证工作流与恢复能力"| InitServices
+    Tests -.->|"验证路由、升级、并行、审批与恢复"| InitServices
 `,
 };
 
@@ -345,6 +366,8 @@ async function main() {
     }, { name, code });
 
     const mount = page.locator('#mount');
+    const svgMarkup = await mount.locator('svg').evaluate((svg) => svg.outerHTML);
+    fs.writeFileSync(path.join(outputDir, `${name}.svg`), svgMarkup, 'utf8');
     await mount.screenshot({
       path: path.join(outputDir, `${name}.png`),
       type: 'png',

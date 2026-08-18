@@ -992,6 +992,52 @@ body {
     border: 1px solid rgba(26, 115, 232, 0.2);
 }
 
+.aiops-panel-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, 0.52);
+}
+
+.aiops-panel-backdrop[hidden] { display: none; }
+
+.aiops-panel {
+    width: min(680px, 100%);
+    max-height: 90vh;
+    overflow: auto;
+    padding: 24px;
+    border-radius: 18px;
+    background: #fff;
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.aiops-panel-header { display: flex; justify-content: space-between; gap: 20px; }
+.aiops-panel-header h2 { margin: 0 0 6px; color: #172554; }
+.aiops-panel-header p, .aiops-identity-note { color: #64748b; font-size: 13px; }
+.aiops-panel-close { border: 0; background: transparent; font-size: 28px; cursor: pointer; }
+.aiops-panel label { display: grid; gap: 7px; margin-top: 16px; color: #334155; font-weight: 600; }
+.aiops-panel input, .aiops-panel textarea, .aiops-panel select {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+}
+.aiops-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.aiops-panel .aiops-checkbox { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.aiops-panel .aiops-checkbox input { width: auto; }
+.aiops-start-btn { width: 100%; margin-top: 18px; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
+.strategy-badge { display: inline-flex; margin: 2px 4px; padding: 2px 8px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: 12px; font-weight: 700; }
+.approval-card { margin-top: 12px; padding: 14px; border: 1px solid #f59e0b; border-radius: 10px; background: #fffbeb; }
+.approval-card button { margin: 8px 8px 0 0; padding: 7px 12px; }
+@media (max-width: 640px) { .aiops-form-grid { grid-template-columns: 1fr; } }
+
 /* 详情折叠区域 */
 .aiops-details {
     margin-bottom: 16px;

@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 from langchain_core.tools import StructuredTool
 
-from app.agent.tool_gateway import ToolGateway, create_tool_gateway
 from app.agent.identity import AgentIdentity, AgentRole
 from app.agent.policy import ToolPolicy, ToolPolicyEngine
+from app.agent.tool_gateway import ToolGateway, create_tool_gateway
 from app.agent.tool_risk import (
     HIGH_RISK_METADATA,
     READ_ONLY_METADATA,

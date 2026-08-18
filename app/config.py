@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     rag_top_k: int = 3
     rag_model: str = "qwen-max"  # 使用快速响应模型，不带扩展思考
 
+    # Incident strategy routing
+    incident_confidence_threshold: float = Field(default=0.60, ge=0, le=1)
+    incident_max_escalations: int = Field(default=1, ge=0, le=3)
+
     # 文档分块配置
     chunk_max_size: int = 800
     chunk_overlap: int = 100
@@ -75,7 +79,7 @@ class Settings(BaseSettings):
             "monitor": {
                 "transport": self.mcp_monitor_transport,
                 "url": self.mcp_monitor_url,
-            }
+            },
         }
 
     @model_validator(mode="after")

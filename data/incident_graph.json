@@ -1,0 +1,70 @@
+{
+  "snapshot_version": "2026-08-18.sample-v1",
+  "provenance": {
+    "source": "sample",
+    "description": "Versioned demonstration snapshot; not production telemetry"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "service:data-sync-service",
+        "type": "service",
+        "name": "data-sync-service",
+        "properties": {"source": "sample", "tier": "backend"}
+      },
+      {
+        "id": "database:primary-postgres",
+        "type": "database",
+        "name": "primary-postgres",
+        "properties": {"source": "sample"}
+      },
+      {
+        "id": "change:deploy-data-sync-v2",
+        "type": "change",
+        "name": "deploy-data-sync-v2",
+        "properties": {"source": "sample", "kind": "deployment"}
+      },
+      {
+        "id": "incident:data-sync-cpu-2025",
+        "type": "incident",
+        "name": "historical data sync CPU saturation",
+        "properties": {"source": "sample", "resolution": "rollback concurrency change"}
+      }
+    ],
+    "edges": [
+      {
+        "source": "service:data-sync-service",
+        "target": "database:primary-postgres",
+        "type": "depends_on",
+        "timestamp": null,
+        "properties": {"source": "sample"}
+      },
+      {
+        "source": "service:data-sync-service",
+        "target": "change:deploy-data-sync-v2",
+        "type": "changed_by",
+        "timestamp": "2025-06-01T09:00:00Z",
+        "properties": {"source": "sample"}
+      },
+      {
+        "source": "incident:data-sync-cpu-2025",
+        "target": "service:data-sync-service",
+        "type": "affects",
+        "timestamp": "2025-06-01T09:15:00Z",
+        "properties": {"source": "sample"}
+      }
+    ]
+  },
+  "documents": [
+    {
+      "chunk_id": "sample-data-sync-runbook-1",
+      "content": "data-sync-service CPU saturation: verify worker concurrency, database latency and deployment changes before remediation.",
+      "source": "sample://runbook/data-sync-cpu",
+      "service": "data-sync-service",
+      "fault_type": "cpu_saturation",
+      "version": "1",
+      "timestamp": "2025-06-01T09:20:00Z",
+      "metadata": {"source": "sample"}
+    }
+  ]
+}

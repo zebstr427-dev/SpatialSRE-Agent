@@ -1,6 +1,6 @@
-# OnCall Agent P0-P3 学习路线
+# OnCall Agent 学习与验收路线
 
-这一组课程完成 P0-P3 全路线。目标不只是让 Demo 使用 PostgreSQL，而是建立一套可解释、可测试、可恢复、权限可控，并具备 Runbook、变更关联、混合检索、故障图谱、回放和项目内多 Agent 协作的 Incident Response Agent Platform。
+这组课程完整覆盖可解释、可测试、可恢复、权限可控的 Incident Response Agent Platform，并包含 Runbook、变更关联、混合检索、故障图谱、回放、双策略路由和项目内多 Agent 协作。
 
 ## 架构主线
 
@@ -10,14 +10,16 @@ HTTP / SSE
         -> CheckpointRuntime
             -> AsyncConnectionPool
                 -> AsyncPostgresSaver
-                    -> AIOpsService
-                        -> LangGraph StateGraph
+                    -> AIOpsService / single StateGraph
+                        -> Incident Router
+                            -> Simple strategy
+                            -> Enterprise strategy
 
 incident_id -> LangGraph thread_id -> PostgreSQL checkpoints
 trace_id    -> 一次执行链路
 session_id  -> 用户会话，不再承担故障隔离职责
 
-EnterpriseIncidentWorkflow
+EnterpriseIncidentWorkflow nodes
     -> Triage Agent
     -> RAG Agent (Runbook + Hybrid RAG + GraphRAG)
     -> SRE Agent || Change Agent
@@ -58,6 +60,7 @@ EnterpriseIncidentWorkflow
 28. [并行与失败隔离](28-parallel-failure-isolation.md)
 29. [项目内多 Agent 角色](29-agent-roles.md)
 30. [AgentOps 与企业级最终 Demo](30-agentops-demo.md)
+31. [单一 Durable Incident Runtime 与双策略路由](31-unified-durable-incident-runtime.md)
 
 ## 最终验证命令
 
@@ -69,19 +72,19 @@ EnterpriseIncidentWorkflow
 .\.venv\Scripts\pytest.exe -m postgres -q
 
 # 静态检查和语法检查
-$changedPython = git diff --name-only 4d2a903..HEAD -- "*.py"
-.\.venv\Scripts\ruff.exe check $changedPython
+.\.venv\Scripts\ruff.exe check app tests
+.\.venv\Scripts\pyright.exe app
 .\.venv\Scripts\python.exe -m compileall -q app tests
 
 # 确定性企业级演示
 .\.venv\Scripts\python.exe -m app.demo
 ```
 
-P0-P3 最终验收结果（2026-08-05）：非 PostgreSQL `115 passed`，真实 PostgreSQL `2 passed`，完整套件 `117 passed`，应用代码总覆盖率 `64.34%`。
+最终验收结果：非 PostgreSQL `130 passed`，真实 PostgreSQL `2 passed`，完整套件 `132 passed`，应用代码总覆盖率 `66.42%`。
 
-## 已知基线技术债
+## 静态检查基线
 
-`ruff check app tests` 仍会报告旧 RAG、MCP 和向量服务中的 165 条风格问题。本阶段所有新增和修改的 Python 文件已通过 Ruff；遗留告警没有通过无关的大规模格式化混入本阶段提交，后续应单独建立 lint-baseline 治理任务。
+`ruff check app tests` 全量通过；Pyright 使用 Python 3.13 / Windows 配置并保持 `0 errors`。
 
 ## 面试叙事
 
@@ -100,3 +103,5 @@ P1 随后把风险、身份、Policy-as-Code、人类审批和证据护栏叠加
 P2 将运维经验沉淀为五类版本化 Runbook，并让 Planner 优先走确定性流程；Change Intelligence 将发布、配置、Git 和 K8s 变更按服务、依赖、时间和环境评分；Hybrid RAG 组合 Query Rewrite、BM25、向量 RRF、Rerank、元数据过滤和稳定引用，并用独立指标验证检索质量。
 
 P3 用项目自有图模型和 NetworkX 建立 Incident Graph，支持依赖、影响、变更和相似故障查询；GraphRAG 将局部子图、全局摘要和 Hybrid 文档融合为带 provenance 的上下文；Failure Replay 用隔离 fixture 回归根因、工具轨迹、证据、幻觉、延迟和成本。最终 LangGraph 工作流编排五个项目内 Agent，SRE/Change 并行且失败隔离，每个角色生成 OpenTelemetry/AgentOps 记录，并通过强类型 API 和确定性 Demo 展示完整链路。
+
+P4 收敛此前并存的两条故障链：`AIOpsService` 成为唯一 Durable Incident Runtime，Simple 与 Enterprise 作为同一父图的两组策略节点；确定性 Router 先按结构化复杂度选择，Simple 证据不足时最多动态升级一次。两组节点共享 Checkpoint、Tool Gateway、Policy、审批、审计和 `IncidentState`，企业兼容 API 只负责强制策略，不再拥有生产执行链。

@@ -119,10 +119,7 @@ class ToolGateway:
         )
 
     def list_tools(self) -> list[BaseTool]:
-        return [
-            registration.tool
-            for registration in self._registrations.values()
-        ]
+        return [registration.tool for registration in self._registrations.values()]
 
     def registration_for(
         self,
@@ -261,10 +258,7 @@ class ToolGateway:
                 )
                 await self._emit_audit(result)
                 return result
-            if (
-                decision.action is PolicyAction.REQUIRE_APPROVAL
-                and not approval_granted
-            ):
+            if decision.action is PolicyAction.REQUIRE_APPROVAL and not approval_granted:
                 message = f"Tool '{tool_name}' requires human approval"
                 result = ToolExecutionResult(
                     tool_call_id=tool_call_id,
@@ -313,10 +307,7 @@ class ToolGateway:
         try:
             json.dumps(safe_arguments)
         except (TypeError, ValueError) as exc:
-            message = (
-                f"Tool '{tool_name}' received non-serializable arguments: "
-                f"{exc}"
-            )
+            message = f"Tool '{tool_name}' received non-serializable arguments: " f"{exc}"
             result = ToolExecutionResult(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -376,10 +367,7 @@ class ToolGateway:
                 error_code = "tool_execution_failed"
                 error_message = f"Tool '{tool_name}' failed: {exc}"
 
-            if (
-                attempts < registration.max_attempts
-                and registration.retry_delay_seconds > 0
-            ):
+            if attempts < registration.max_attempts and registration.retry_delay_seconds > 0:
                 await asyncio.sleep(registration.retry_delay_seconds)
 
         result = ToolExecutionResult(
@@ -438,17 +426,21 @@ async def create_tool_gateway(
     if mcp_tools is None:
         from app.agent.mcp_client import get_mcp_client
 
-        mcp_client = await get_mcp_client(force_new=True)
-        mcp_tools = await mcp_client.get_tools()
+        try:
+            mcp_client = await get_mcp_client(force_new=True)
+            mcp_tools = await mcp_client.get_tools()
+        except Exception as exc:
+            # Local tools remain useful when a demo MCP provider is offline.
+            # The role invoking an unavailable MCP tool records the concrete
+            # provider failure instead of substituting fabricated evidence.
+            logger.warning("MCP tools unavailable; continuing local-only: {}", exc)
+            mcp_tools = ()
 
     resolved_local_tools = tuple(local_tools)
     resolved_mcp_tools = tuple(mcp_tools)
     gateway = ToolGateway(
         audit_hook=audit_hook,
-        policy_engine=(
-            policy_engine
-            or ToolPolicyEngine(load_default_tool_policy())
-        ),
+        policy_engine=(policy_engine or ToolPolicyEngine(load_default_tool_policy())),
     )
 
     for tool in resolved_local_tools:
