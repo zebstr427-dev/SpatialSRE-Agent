@@ -2,7 +2,7 @@ import pytest
 
 from app.agent.tool_risk import (
     DEFAULT_READ_ONLY_TOOL_NAMES,
-    HIGH_RISK_METADATA,
+    RESTART_SERVICE_METADATA,
     ToolRiskLevel,
     ToolRiskMetadata,
     risk_metadata_for,
@@ -28,11 +28,10 @@ def test_known_query_tools_are_read_only_and_unknown_tools_fail_closed() -> None
     }
 
     assert DEFAULT_READ_ONLY_TOOL_NAMES == frozenset(expected_names)
-    assert all(
-        risk_metadata_for(name).level is ToolRiskLevel.READ_ONLY
-        for name in expected_names
-    )
-    assert risk_metadata_for("restart_service") is HIGH_RISK_METADATA
+    assert all(risk_metadata_for(name).level is ToolRiskLevel.READ_ONLY for name in expected_names)
+    assert risk_metadata_for("restart_service") is RESTART_SERVICE_METADATA
+    assert RESTART_SERVICE_METADATA.level is ToolRiskLevel.WRITE
+    assert RESTART_SERVICE_METADATA.dry_run_argument == "dry_run"
 
 
 def test_write_metadata_requires_a_dry_run_argument() -> None:

@@ -11,6 +11,7 @@ from app.api.aiops import router
 class FakeAIOpsService:
     def __init__(self) -> None:
         self.diagnose_calls: list[dict[str, Any]] = []
+        self.execute_to_state_calls: list[dict[str, Any]] = []
         self.incidents: dict[str, dict[str, Any]] = {
             "incident-456": {
                 "incident_id": "incident-456",
@@ -65,6 +66,21 @@ class FakeAIOpsService:
                     "reason": reason,
                 }
             ],
+        }
+
+    async def execute_to_state(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.execute_to_state_calls.append(
+            {"user_input": user_input, "session_id": session_id, **kwargs}
+        )
+        return {
+            "incident_id": kwargs.get("incident_id"),
+            "status": "completed",
+            "selected_strategy": kwargs.get("strategy"),
         }
 
 
@@ -198,6 +214,36 @@ def test_run_enterprise_incident_workflow() -> None:
             },
         }
     ]
+
+
+def test_enterprise_compatibility_endpoint_forwards_to_shared_runtime() -> None:
+    service = FakeAIOpsService()
+    legacy = FakeEnterpriseWorkflow()
+    app = FastAPI()
+    app.state.aiops_service = service
+    app.state.enterprise_workflow = legacy
+    app.include_router(router, prefix="/api")
+
+    response = TestClient(app).post(
+        "/api/enterprise/incidents",
+        json={
+            "input": "diagnose checkout",
+            "incident_id": "enterprise-shared-1",
+            "execute_remediation": True,
+            "alert": {
+                "alert_name": "ServiceUnavailable",
+                "service": "checkout",
+                "severity": "critical",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["selected_strategy"] == "enterprise"
+    assert legacy.calls == []
+    call = service.execute_to_state_calls[0]
+    assert call["strategy"] == "enterprise"
+    assert call["execute_remediation"] is True
 
 
 def test_enterprise_incident_returns_503_when_runtime_is_missing() -> None:

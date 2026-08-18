@@ -1,30 +1,54 @@
-"""
-通用 Plan-Execute-Replan 服务
-基于 LangGraph 官方教程实现
-"""
+"""Single durable incident runtime with Simple and Enterprise strategies."""
+
+from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from textwrap import dedent
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from loguru import logger
 
-from app.agent.aiops.state import IncidentState, create_incident_state, utc_now_iso
-from app.agent.identity import AgentIdentity
+from app.agent.aiops.router import (
+    ENTERPRISE,
+    SIMPLE,
+    evidence_assessor,
+    incident_router,
+    route_after_evidence_assessor,
+    route_after_incident_router,
+)
+from app.agent.aiops.state import (
+    DiagnosisStrategy,
+    IncidentState,
+    create_incident_state,
+    utc_now_iso,
+)
+from app.agent.enterprise_workflow import (
+    NODE_ENTERPRISE_CHANGE,
+    NODE_ENTERPRISE_RAG,
+    NODE_ENTERPRISE_REMEDIATION,
+    NODE_ENTERPRISE_REPORT,
+    NODE_ENTERPRISE_ROOT_CAUSE,
+    NODE_ENTERPRISE_SRE,
+    NODE_ENTERPRISE_TRIAGE,
+    EnterpriseIncidentWorkflow,
+)
 from app.agent.evidence import evidence_citations, validate_incident_input
+from app.agent.identity import AgentIdentity
 
-# 节点名称常量
+NODE_INCIDENT_ROUTER = "incident_router"
 NODE_PLANNER = "planner"
 NODE_EXECUTOR = "executor"
 NODE_REPLANNER = "replanner"
 NODE_APPROVAL = "approval"
+NODE_EVIDENCE_ASSESSOR = "evidence_assessor"
 NodeCallable = Callable[[IncidentState], Awaitable[dict[str, Any]]]
 
 
 class AIOpsService:
-    """通用 Plan-Execute-Replan 服务"""
+    """Own the only checkpointed incident graph used by production APIs."""
 
     def __init__(
         self,
@@ -34,9 +58,8 @@ class AIOpsService:
         executor_node: NodeCallable | None = None,
         replanner_node: NodeCallable | None = None,
         approval_node_callable: NodeCallable | None = None,
-    ):
-        """Initialize the graph with caller-owned persistence and injectable nodes."""
-
+        enterprise_workflow: EnterpriseIncidentWorkflow | None = None,
+    ) -> None:
         if planner_node is None:
             from app.agent.aiops.planner import planner as planner_node
         if executor_node is None:
@@ -51,30 +74,33 @@ class AIOpsService:
         self.executor_node = executor_node
         self.replanner_node = replanner_node
         self.approval_node = approval_node_callable
+        self.enterprise_workflow = enterprise_workflow or EnterpriseIncidentWorkflow()
         self.graph = self._build_graph()
-        logger.info("Plan-Execute-Replan Service 初始化完成")
+        logger.info("Durable Incident Runtime initialized")
 
     def _build_graph(self):
-        """构建 Plan-Execute-Replan 工作流"""
-        logger.info("构建工作流图...")
-
-        # 创建状态图
         workflow = StateGraph(IncidentState)
-
-        # 添加节点
-        workflow.add_node(NODE_PLANNER, self.planner_node)  # 制定计划
-        workflow.add_node(NODE_EXECUTOR, self.executor_node)  # 执行步骤
-        workflow.add_node(NODE_REPLANNER, self.replanner_node)  # 重新规划
+        workflow.add_node(NODE_INCIDENT_ROUTER, incident_router)
+        workflow.add_node(NODE_PLANNER, self.planner_node)
+        workflow.add_node(NODE_EXECUTOR, self.executor_node)
+        workflow.add_node(NODE_REPLANNER, self.replanner_node)
         workflow.add_node(NODE_APPROVAL, self.approval_node)
+        workflow.add_node(NODE_EVIDENCE_ASSESSOR, evidence_assessor)
+        self.enterprise_workflow.register_nodes(workflow)
 
-        # 设置入口点
-        workflow.set_entry_point(NODE_PLANNER)
+        workflow.add_edge(START, NODE_INCIDENT_ROUTER)
+        workflow.add_conditional_edges(
+            NODE_INCIDENT_ROUTER,
+            route_after_incident_router,
+            {SIMPLE: NODE_PLANNER, ENTERPRISE: NODE_ENTERPRISE_TRIAGE},
+        )
+        workflow.add_edge(NODE_PLANNER, NODE_EXECUTOR)
 
-        # 定义边
-        workflow.add_edge(NODE_PLANNER, NODE_EXECUTOR)     # planner -> executor
         def after_executor(state: IncidentState) -> str:
             if state.get("pending_tool_calls") and state.get("approval_decision") is None:
                 return NODE_APPROVAL
+            if state.get("selected_strategy") == ENTERPRISE:
+                return NODE_EXECUTOR if state.get("plan") else NODE_ENTERPRISE_REPORT
             return NODE_REPLANNER
 
         workflow.add_conditional_edges(
@@ -82,43 +108,58 @@ class AIOpsService:
             after_executor,
             {
                 NODE_APPROVAL: NODE_APPROVAL,
+                NODE_EXECUTOR: NODE_EXECUTOR,
                 NODE_REPLANNER: NODE_REPLANNER,
+                NODE_ENTERPRISE_REPORT: NODE_ENTERPRISE_REPORT,
             },
         )
+        # Keeping this edge and the node name preserves old approval checkpoints.
         workflow.add_edge(NODE_APPROVAL, NODE_EXECUTOR)
 
-        # replanner 的条件边
-        def should_continue(state: IncidentState) -> str:
-            """判断是否继续执行"""
-            # 如果已经生成了最终响应，结束
-            if state.get("response"):
-                logger.info("已生成最终响应，结束流程")
-                return END
-
-            # 如果还有计划步骤，继续执行
-            plan = state.get("plan", [])
-            if plan:
-                logger.info(f"继续执行，剩余 {len(plan)} 个步骤")
+        def after_replanner(state: IncidentState) -> str:
+            if state.get("plan") and not state.get("response"):
                 return NODE_EXECUTOR
-
-            # 计划为空但没有响应，返回 replanner 生成响应
-            logger.info("计划执行完毕，生成最终响应")
-            return END
+            return NODE_EVIDENCE_ASSESSOR
 
         workflow.add_conditional_edges(
             NODE_REPLANNER,
-            should_continue,
+            after_replanner,
             {
                 NODE_EXECUTOR: NODE_EXECUTOR,
-                END: END
-            }
+                NODE_EVIDENCE_ASSESSOR: NODE_EVIDENCE_ASSESSOR,
+            },
+        )
+        workflow.add_conditional_edges(
+            NODE_EVIDENCE_ASSESSOR,
+            route_after_evidence_assessor,
+            {ENTERPRISE: NODE_ENTERPRISE_TRIAGE, "complete": END},
         )
 
-        # 编译工作流
-        compiled_graph = workflow.compile(checkpointer=self.checkpointer)
+        workflow.add_edge(NODE_ENTERPRISE_TRIAGE, NODE_ENTERPRISE_RAG)
+        # SRE and Change run in one superstep and converge before root cause.
+        workflow.add_edge(NODE_ENTERPRISE_RAG, NODE_ENTERPRISE_SRE)
+        workflow.add_edge(NODE_ENTERPRISE_RAG, NODE_ENTERPRISE_CHANGE)
+        workflow.add_edge(NODE_ENTERPRISE_SRE, NODE_ENTERPRISE_ROOT_CAUSE)
+        workflow.add_edge(NODE_ENTERPRISE_CHANGE, NODE_ENTERPRISE_ROOT_CAUSE)
+        workflow.add_edge(NODE_ENTERPRISE_ROOT_CAUSE, NODE_ENTERPRISE_REMEDIATION)
 
-        logger.info("工作流图构建完成")
-        return compiled_graph
+        def after_remediation(state: IncidentState) -> str:
+            return NODE_EXECUTOR if state.get("plan") else NODE_ENTERPRISE_REPORT
+
+        workflow.add_conditional_edges(
+            NODE_ENTERPRISE_REMEDIATION,
+            after_remediation,
+            {
+                NODE_EXECUTOR: NODE_EXECUTOR,
+                NODE_ENTERPRISE_REPORT: NODE_ENTERPRISE_REPORT,
+            },
+        )
+        workflow.add_edge(NODE_ENTERPRISE_REPORT, END)
+        return workflow.compile(checkpointer=self.checkpointer)
+
+    @staticmethod
+    def _config(incident_id: str) -> dict[str, dict[str, str]]:
+        return {"configurable": {"thread_id": incident_id}}
 
     async def execute(
         self,
@@ -129,17 +170,15 @@ class AIOpsService:
         trace_id: str | None = None,
         identity: AgentIdentity | None = None,
         alert: dict[str, object] | None = None,
+        strategy: DiagnosisStrategy = "simple",
+        execute_remediation: bool = False,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        执行 Plan-Execute-Replan 流程
+        """Execute one incident and emit a stable event stream.
 
-        Args:
-            user_input: 用户的任务描述
-            session_id: 会话ID
-
-        Yields:
-            Dict[str, Any]: 流式事件
+        The programmatic compatibility default remains ``simple``; both HTTP
+        request models explicitly default to ``auto``.
         """
+
         safe_input = validate_incident_input(user_input)
         initial_state = create_incident_state(
             safe_input,
@@ -148,6 +187,8 @@ class AIOpsService:
             trace_id=trace_id,
             identity=identity,
             alert=alert,
+            strategy=strategy,
+            execute_remediation=execute_remediation,
         )
         resolved_incident_id = initial_state["incident_id"]
         resolved_trace_id = initial_state["trace_id"]
@@ -164,103 +205,103 @@ class AIOpsService:
                 "timestamp": utc_now_iso(),
             }
 
+        config_dict = self._config(resolved_incident_id)
         logger.info(
-            f"[故障 {resolved_incident_id}] [会话 {session_id}] 开始执行任务: {user_input}"
+            "[incident={}] starting strategy={} input={}",
+            resolved_incident_id,
+            strategy,
+            safe_input,
         )
-
         try:
-            # 流式执行工作流
-            config_dict = {
-                "configurable": {
-                    "thread_id": resolved_incident_id
-                }
-            }
-
             async for event in self.graph.astream(
                 input=initial_state,
                 config=config_dict,
-                stream_mode="updates"
+                stream_mode="updates",
             ):
-                # 解析事件
                 for node_name, node_output in event.items():
-                    logger.info(f"节点 '{node_name}' 输出事件")
+                    formatted = self._format_node_event(node_name, node_output)
+                    if formatted is not None:
+                        yield enrich(formatted)
 
-                    # 根据节点类型生成不同的事件
-                    if node_name == NODE_PLANNER:
-                        yield enrich(self._format_planner_event(node_output))
-
-                    elif node_name == NODE_EXECUTOR:
-                        yield enrich(self._format_executor_event(node_output))
-
-                    elif node_name == NODE_REPLANNER:
-                        yield enrich(self._format_replanner_event(node_output))
-
-            # 获取最终状态
-            final_state = await self.graph.aget_state(config_dict)
-            final_response = ""
-
-            # 安全地获取响应（处理 values 可能为 None 的情况）
-            if final_state and final_state.values:
-                final_response = final_state.values.get("response", "")
-            final_evidence = (
-                list(final_state.values.get("evidence", []))
-                if final_state and final_state.values
-                else []
-            )
-
-            approval_requests = (
-                final_state.values.get("approval_requests", [])
-                if final_state and final_state.values
-                else []
-            )
-            pending_approval = next(
+            snapshot = await self.graph.aget_state(config_dict)
+            values = dict(snapshot.values or {})
+            pending = next(
                 (
                     item
-                    for item in reversed(approval_requests)
+                    for item in reversed(values.get("approval_requests", []))
                     if item.get("status") == "pending"
                 ),
                 None,
             )
-            if pending_approval is not None:
+            if pending is not None:
                 yield enrich(
                     {
                         "type": "approval_required",
                         "stage": "approval",
                         "message": "工具调用等待人工审批",
-                        "approval": pending_approval,
+                        "approval": pending,
+                        "selected_strategy": values.get("selected_strategy"),
                     }
                 )
                 return
 
-            # 发送完成事件
-            yield enrich({
-                "type": "complete",
-                "stage": "complete",
-                "message": "任务执行完成",
-                "response": final_response,
-                "evidence": final_evidence,
-                "citations": evidence_citations(final_evidence),
-            })
+            evidence = list(values.get("evidence", []))
+            yield enrich(
+                {
+                    "type": "complete",
+                    "stage": "complete",
+                    "message": "任务执行完成",
+                    "response": values.get("response", ""),
+                    "status": values.get("status", "completed"),
+                    "selected_strategy": values.get("selected_strategy"),
+                    "diagnosis_confidence": values.get("diagnosis_confidence", 0.0),
+                    "provider_failures": values.get("provider_failures", []),
+                    "routing_history": values.get("routing_history", []),
+                    "evidence": evidence,
+                    "citations": evidence_citations(evidence),
+                }
+            )
+        except Exception as exc:
+            logger.exception("[incident={}] execution failed", resolved_incident_id)
+            yield enrich({"type": "error", "stage": "error", "message": f"任务执行出错: {exc}"})
 
-            logger.info(f"[故障 {resolved_incident_id}] 任务执行完成")
+    async def execute_to_state(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Run through the shared graph and return its persisted state."""
 
-        except Exception as e:
-            logger.error(f"[故障 {resolved_incident_id}] 任务执行失败: {e}", exc_info=True)
-            yield enrich({
-                "type": "error",
-                "stage": "error",
-                "message": f"任务执行出错: {str(e)}"
-            })
+        resolved_incident_id = kwargs.get("incident_id")
+        terminal_event: dict[str, Any] | None = None
+        async for terminal_event in self.execute(user_input, session_id, **kwargs):
+            if resolved_incident_id is None:
+                resolved_incident_id = terminal_event.get("incident_id")
+        if resolved_incident_id is None:
+            raise RuntimeError("incident runtime did not create an incident id")
+        if terminal_event and terminal_event.get("type") == "error":
+            raise RuntimeError(str(terminal_event.get("message", "incident runtime failed")))
+        state = await self.get_incident(str(resolved_incident_id))
+        if state is None:
+            raise RuntimeError("incident state was not persisted")
+        return state
 
     async def get_incident(self, incident_id: str) -> dict[str, Any] | None:
-        """Load the latest persisted state for one incident."""
-
-        snapshot = await self.graph.aget_state(
-            {"configurable": {"thread_id": incident_id}}
-        )
+        snapshot = await self.graph.aget_state(self._config(incident_id))
         if not snapshot.values:
             return None
-        return dict(snapshot.values)
+        values = dict(snapshot.values)
+        # v1 checkpoints are interpreted as Simple without a database migration.
+        values.setdefault("workflow_version", "1")
+        values.setdefault("requested_strategy", "simple")
+        values.setdefault("selected_strategy", "simple")
+        values.setdefault("routing_history", [])
+        values.setdefault("diagnosis_confidence", 0.0)
+        values.setdefault("escalation_count", 0)
+        values.setdefault("provider_failures", [])
+        values.setdefault("execute_remediation", False)
+        return values
 
     async def resolve_approval(
         self,
@@ -270,9 +311,7 @@ class AIOpsService:
         decided_by: str,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        """Resume a checkpointed approval interrupt and return latest state."""
-
-        config_dict = {"configurable": {"thread_id": incident_id}}
+        config_dict = self._config(incident_id)
         snapshot = await self.graph.aget_state(config_dict)
         if not snapshot.values:
             raise KeyError("incident not found")
@@ -283,15 +322,8 @@ class AIOpsService:
         ]
         if not pending:
             raise ValueError("incident has no pending approval")
-
         await self.graph.ainvoke(
-            Command(
-                resume={
-                    "approved": approved,
-                    "decided_by": decided_by,
-                    "reason": reason,
-                }
-            ),
+            Command(resume={"approved": approved, "decided_by": decided_by, "reason": reason}),
             config=config_dict,
         )
         resolved = await self.graph.aget_state(config_dict)
@@ -301,96 +333,19 @@ class AIOpsService:
         self,
         session_id: str = "default",
         *,
+        user_input: str | None = None,
         incident_id: str | None = None,
         trace_id: str | None = None,
         identity: AgentIdentity | None = None,
         alert: dict[str, object] | None = None,
+        strategy: DiagnosisStrategy = "auto",
+        execute_remediation: bool = False,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        AIOps 诊断接口（兼容旧接口）
-
-        Args:
-            session_id: 会话ID
-
-        Yields:
-            Dict[str, Any]: 诊断过程的流式事件
-        """
-        # 使用固定的 AIOps 任务描述
-        from textwrap import dedent
-        aiops_task = dedent("""诊断当前系统是否存在告警，如果存在告警请详细分析告警原因并生成诊断报告，诊断报告输出格式要求：
-                ```
-                # 告警分析报告
-
-                ---
-
-                ## 📋 活跃告警清单
-
-                | 告警名称 | 级别 | 目标服务 | 首次触发时间 | 最新触发时间 | 状态 |
-                |---------|------|----------|-------------|-------------|------|
-                | [告警1名称] | [级别] | [服务名] | [时间] | [时间] | 活跃 |
-                | [告警2名称] | [级别] | [服务名] | [时间] | [时间] | 活跃 |
-
-                ---
-
-                ## 🔍 告警根因分析1 - [告警名称]
-
-                ### 告警详情
-                - **告警级别**: [级别]
-                - **受影响服务**: [服务名]
-                - **持续时间**: [X分钟]
-
-                ### 症状描述
-                [根据监控指标描述症状]
-
-                ### 日志证据
-                [引用查询到的关键日志]
-
-                ### 根因结论
-                [基于证据得出的根本原因]
-
-                ---
-
-                ## 🛠️ 处理方案执行1 - [告警名称]
-
-                ### 已执行的排查步骤
-                1. [步骤1]
-                2. [步骤2]
-
-                ### 处理建议
-                [给出具体的处理建议]
-
-                ### 预期效果
-                [说明预期的效果]
-
-                ---
-
-                ## 🔍 告警根因分析2 - [告警名称]
-                [如果有第2个告警，重复上述格式]
-
-                ---
-
-                ## 📊 结论
-
-                ### 整体评估
-                [总结所有告警的整体情况]
-
-                ### 关键发现
-                - [发现1]
-                - [发现2]
-
-                ### 后续建议
-                1. [建议1]
-                2. [建议2]
-
-                ### 风险评估
-                [评估当前风险等级和影响范围]
-                ```
-
-                **重要提醒**：
-                - 最终输出必须是纯 Markdown 文本，不要包含 JSON 结构
-                - 所有内容必须基于工具查询的真实数据，严禁编造
-                - 如果某个步骤失败，在结论中如实说明，不要跳过""")
-
+        aiops_task = user_input or dedent("""\
+            诊断当前系统是否存在告警；基于工具返回的真实证据分析根因，
+            明确标注失败的查询，并输出 Markdown 告警分析报告和处理建议。
+            严禁编造没有证据支持的指标、日志或变更。
+            """).strip()
         async for event in self.execute(
             aiops_task,
             session_id,
@@ -398,95 +353,105 @@ class AIOpsService:
             trace_id=trace_id,
             identity=identity,
             alert=alert,
+            strategy=strategy,
+            execute_remediation=execute_remediation,
         ):
-            # 转换事件格式以兼容旧的 API
             if event.get("type") == "complete":
-                # 将 response 包装为 diagnosis 格式
                 yield {
                     **event,
-                    "type": "complete",
                     "stage": "diagnosis_complete",
                     "message": "诊断流程完成",
                     "diagnosis": {
-                        "status": "completed",
-                        "report": event.get("response", "")
-                    }
+                        "status": event.get("status", "completed"),
+                        "report": event.get("response", ""),
+                    },
                 }
             else:
                 yield event
 
-    def _format_planner_event(self, state: dict | None) -> dict:
-        """格式化 Planner 节点事件"""
-        if not state:
+    def _format_node_event(
+        self,
+        node_name: str,
+        state: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if node_name == NODE_INCIDENT_ROUTER:
+            history = list((state or {}).get("routing_history", []))
+            decision = history[-1] if history else {}
             return {
-                "type": "status",
-                "stage": "planner",
-                "message": "规划节点执行中"
+                "type": "routing",
+                "stage": "incident_router",
+                "message": "诊断策略已选择",
+                "selected_strategy": (state or {}).get("selected_strategy"),
+                "routing": decision,
             }
+        if node_name == NODE_PLANNER:
+            return self._format_planner_event(state)
+        if node_name == NODE_EXECUTOR:
+            return self._format_executor_event(state)
+        if node_name == NODE_REPLANNER:
+            return self._format_replanner_event(state)
+        if node_name == NODE_EVIDENCE_ASSESSOR:
+            escalated = (state or {}).get("selected_strategy") == ENTERPRISE
+            return {
+                "type": "escalation" if escalated else "status",
+                "stage": "evidence_assessor",
+                "message": "证据不足，升级到企业多 Agent" if escalated else "证据评估完成",
+                "diagnosis_confidence": (state or {}).get("diagnosis_confidence", 0.0),
+                "selected_strategy": (state or {}).get("selected_strategy"),
+                "routing": ((state or {}).get("routing_history") or [None])[-1],
+            }
+        if node_name.startswith("enterprise_"):
+            role_outputs = list((state or {}).get("role_outputs", []))
+            role = role_outputs[-1] if role_outputs else None
+            event_type = "report" if node_name == NODE_ENTERPRISE_REPORT else "agent_update"
+            return {
+                "type": event_type,
+                "stage": node_name,
+                "message": f"{node_name} 完成",
+                "agent": role,
+                "provider_failures": (state or {}).get("provider_failures", []),
+                "report": (state or {}).get("response", ""),
+            }
+        return None
 
-        plan = state.get("plan", [])
-
+    @staticmethod
+    def _format_planner_event(state: dict[str, Any] | None) -> dict[str, Any]:
+        plan = list((state or {}).get("plan", []))
         return {
             "type": "plan",
             "stage": "plan_created",
             "message": f"执行计划已制定，共 {len(plan)} 个步骤",
-            "plan": plan
+            "plan": plan,
         }
 
-    def _format_executor_event(self, state: dict | None) -> dict:
-        """格式化 Executor 节点事件"""
-        if not state:
-            return {
-                "type": "status",
-                "stage": "executor",
-                "message": "执行节点运行中"
-            }
+    @staticmethod
+    def _format_executor_event(state: dict[str, Any] | None) -> dict[str, Any]:
+        plan = list((state or {}).get("plan", []))
+        past_steps = list((state or {}).get("past_steps", []))
+        if not past_steps:
+            return {"type": "status", "stage": "executor", "message": "开始执行步骤"}
+        return {
+            "type": "step_complete",
+            "stage": "step_executed",
+            "message": f"步骤执行完成 ({len(past_steps)}/{len(past_steps) + len(plan)})",
+            "current_step": past_steps[-1].get("step"),
+            "remaining_steps": len(plan),
+        }
 
-        plan = state.get("plan", [])
-        past_steps = state.get("past_steps", [])
-
-        if past_steps:
-            last_step = past_steps[-1]["step"]
-            return {
-                "type": "step_complete",
-                "stage": "step_executed",
-                "message": f"步骤执行完成 ({len(past_steps)}/{len(past_steps) + len(plan)})",
-                "current_step": last_step,
-                "remaining_steps": len(plan)
-            }
-        else:
-            return {
-                "type": "status",
-                "stage": "executor",
-                "message": "开始执行步骤"
-            }
-
-    def _format_replanner_event(self, state: dict | None) -> dict:
-        """格式化 Replanner 节点事件"""
-        if not state:
-            return {
-                "type": "status",
-                "stage": "replanner",
-                "message": "评估节点运行中"
-            }
-
-        response = state.get("response", "")
-        plan = state.get("plan", [])
-
+    @staticmethod
+    def _format_replanner_event(state: dict[str, Any] | None) -> dict[str, Any]:
+        response = (state or {}).get("response", "")
+        plan = list((state or {}).get("plan", []))
         if response:
-            # 已生成最终响应
             return {
                 "type": "report",
                 "stage": "final_report",
                 "message": "最终报告已生成",
-                "report": response
+                "report": response,
             }
-        else:
-            # 重新规划
-            return {
-                "type": "status",
-                "stage": "replanner",
-                "message": f"评估完成，{'继续执行剩余步骤' if plan else '准备生成最终响应'}",
-                "remaining_steps": len(plan)
-            }
-
+        return {
+            "type": "status",
+            "stage": "replanner",
+            "message": "评估完成",
+            "remaining_steps": len(plan),
+        }

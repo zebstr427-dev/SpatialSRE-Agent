@@ -9,7 +9,14 @@ from uuid import uuid4
 from app.agent.identity import AgentIdentity, default_agent_identity
 
 IncidentSeverity = Literal["critical", "high", "medium", "low", "unknown"]
-IncidentStatus = Literal["pending", "running", "completed", "failed"]
+IncidentStatus = Literal[
+    "pending",
+    "running",
+    "completed",
+    "completed_with_partial_results",
+    "failed",
+]
+DiagnosisStrategy = Literal["auto", "simple", "enterprise"]
 StepStatus = Literal["succeeded", "failed"]
 ToolCallStatus = Literal["succeeded", "failed"]
 EvidenceSourceType = Literal["metric", "log", "knowledge", "change", "tool"]
@@ -57,12 +64,20 @@ class IncidentState(TypedDict):
     """Shared state persisted after each LangGraph superstep."""
 
     input: str
+    workflow_version: str
     incident_id: str
     trace_id: str
     session_id: str
     identity: dict[str, object]
     alert: dict[str, object]
     severity: IncidentSeverity
+    requested_strategy: DiagnosisStrategy
+    selected_strategy: Literal["simple", "enterprise"] | None
+    routing_history: Annotated[list[dict[str, object]], operator.add]
+    diagnosis_confidence: float
+    escalation_count: int
+    provider_failures: Annotated[list[dict[str, object]], operator.add]
+    execute_remediation: bool
     runbook_id: str | None
     runbook_version: str | None
     runbook_steps: list[dict[str, object]]
@@ -161,6 +176,8 @@ def create_incident_state(
     incident_id: str | None = None,
     trace_id: str | None = None,
     severity: IncidentSeverity = "unknown",
+    strategy: DiagnosisStrategy = "auto",
+    execute_remediation: bool = False,
     identity: AgentIdentity | None = None,
     alert: dict[str, object] | None = None,
 ) -> IncidentState:
@@ -170,12 +187,20 @@ def create_incident_state(
     resolved_identity = identity or default_agent_identity()
     return {
         "input": user_input,
+        "workflow_version": "2",
         "incident_id": incident_id or str(uuid4()),
         "trace_id": trace_id or uuid4().hex,
         "session_id": session_id,
         "identity": resolved_identity.to_record(),
         "alert": dict(alert or {}),
         "severity": severity,
+        "requested_strategy": strategy,
+        "selected_strategy": None,
+        "routing_history": [],
+        "diagnosis_confidence": 0.0,
+        "escalation_count": 0,
+        "provider_failures": [],
+        "execute_remediation": execute_remediation,
         "runbook_id": None,
         "runbook_version": None,
         "runbook_steps": [],

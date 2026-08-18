@@ -9,8 +9,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from app.api import aiops, chat, file, health
 from app.agent.enterprise_workflow import EnterpriseIncidentWorkflow
+from app.api import aiops, chat, file, health
 from app.config import config
 from app.core.checkpoint import open_checkpoint_runtime
 from app.core.milvus_client import milvus_manager
@@ -34,8 +34,12 @@ async def lifespan(app: FastAPI):
     try:
         async with open_checkpoint_runtime(config) as checkpoint_runtime:
             app.state.checkpoint_runtime = checkpoint_runtime
-            app.state.aiops_service = AIOpsService(checkpoint_runtime.saver)
-            app.state.enterprise_workflow = EnterpriseIncidentWorkflow()
+            enterprise_workflow = EnterpriseIncidentWorkflow()
+            app.state.enterprise_workflow = enterprise_workflow
+            app.state.aiops_service = AIOpsService(
+                checkpoint_runtime.saver,
+                enterprise_workflow=enterprise_workflow,
+            )
             logger.info("Durable AIOps runtime ready")
             logger.info("=" * 60)
             yield
@@ -50,7 +54,7 @@ app = FastAPI(
     title=config.app_name,
     version=config.app_version,
     description="基于 LangChain 的智能oncall运维系统",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # 配置 CORS
@@ -72,6 +76,7 @@ app.include_router(aiops.router, prefix="/api", tags=["AIOps智能运维"])
 static_dir = "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+
 @app.get("/")
 async def root():
     """返回首页"""
@@ -81,7 +86,7 @@ async def root():
     return {
         "message": f"Welcome to {config.app_name} API",
         "version": config.app_version,
-        "docs": "/docs"
+        "docs": "/docs",
     }
 
 

@@ -4,18 +4,19 @@ Executor 节点：执行单个步骤
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_qwq import ChatQwen
 from loguru import logger
 
-from app.agent.identity import AgentIdentity
 from app.agent.approval import create_approval_request
 from app.agent.evidence import create_tool_evidence
+from app.agent.identity import AgentIdentity
 from app.agent.tool_gateway import ToolExecutionResult, create_tool_gateway
-from app.config import config
 from app.change_intelligence import ChangeRecord
+from app.config import config
 
 from .state import (
     IncidentState,
@@ -24,6 +25,12 @@ from .state import (
     create_tool_call_audit_record,
     utc_now_iso,
 )
+
+
+def _string_keyed_dict(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
 
 
 async def executor(state: IncidentState) -> dict[str, Any]:
@@ -117,14 +124,15 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                     {
                         "id": str(item["tool_call_id"]),
                         "name": str(item["tool_name"]),
-                        "args": dict(item.get("arguments", {})),
+                        "args": _string_keyed_dict(item.get("arguments", {})),
                     }
                     for item in pending_tool_calls
                 ],
             )
         elif runbook_steps:
             runbook_step = runbook_steps[0]
-            runbook_arguments = dict(runbook_step.get("arguments", {}))
+            raw_arguments = runbook_step.get("arguments", {})
+            runbook_arguments = dict(raw_arguments) if isinstance(raw_arguments, Mapping) else {}
             alert = state.get("alert", {})
             service = alert.get("service")
             if isinstance(service, str) and "service" not in runbook_arguments:
@@ -133,10 +141,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 content="",
                 tool_calls=[
                     {
-                        "id": (
-                            f"runbook-{state['incident_id']}-"
-                            f"{runbook_step['id']}"
-                        ),
+                        "id": (f"runbook-{state['incident_id']}-" f"{runbook_step['id']}"),
                         "name": str(runbook_step["tool"]),
                         "args": runbook_arguments,
                     }
@@ -149,9 +154,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
         if hasattr(llm_response, "tool_calls") and llm_response.tool_calls:
             messages.append(llm_response)
             tool_results: list[ToolExecutionResult] = []
-            approved = bool(
-                approval_decision and approval_decision.get("approved")
-            )
+            approved = bool(approval_decision and approval_decision.get("approved"))
             for tool_call in llm_response.tool_calls:
                 tool_results.append(
                     await gateway.invoke(
@@ -165,9 +168,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 )
 
             approval_results = [
-                item
-                for item in tool_results
-                if item.error_code == "tool_approval_required"
+                item for item in tool_results if item.error_code == "tool_approval_required"
             ]
             if approval_results:
                 requests = list(state.get("approval_requests", []))
@@ -216,9 +217,7 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                         started_at=item.started_at,
                         finished_at=item.finished_at,
                         policy_decision_id=(
-                            str(decision["decision_id"])
-                            if decision.get("decision_id")
-                            else None
+                            str(decision["decision_id"]) if decision.get("decision_id") else None
                         ),
                     )
                 )
@@ -232,17 +231,13 @@ async def executor(state: IncidentState) -> dict[str, Any]:
                 ):
                     parsed = json.loads(item.output)
                     change_records.extend(
-                        ChangeRecord.model_validate(record).to_record()
-                        for record in parsed
+                        ChangeRecord.model_validate(record).to_record() for record in parsed
                     )
 
-            failed_results = [
-                item for item in tool_results if item.status == "failed"
-            ]
+            failed_results = [item for item in tool_results if item.status == "failed"]
             if failed_results:
                 failure_summary = "; ".join(
-                    f"{item.tool_name} [{item.error_code}]: "
-                    f"{item.error_message or item.output}"
+                    f"{item.tool_name} [{item.error_code}]: " f"{item.error_message or item.output}"
                     for item in failed_results
                 )
                 raise RuntimeError(f"Tool execution failed: {failure_summary}")

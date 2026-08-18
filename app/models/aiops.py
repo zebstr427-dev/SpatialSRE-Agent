@@ -3,7 +3,7 @@ AIOps 请求和响应模型
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,10 +22,7 @@ class AIOpsRequest(BaseModel):
         }
     )
 
-    session_id: str | None = Field(
-        default="default",
-        description="会话ID，用于追踪诊断历史"
-    )
+    session_id: str | None = Field(default="default", description="会话ID，用于追踪诊断历史")
     incident_id: str | None = Field(
         default=None,
         min_length=1,
@@ -39,6 +36,20 @@ class AIOpsRequest(BaseModel):
     alert: dict[str, Any] | None = Field(
         default=None,
         description="可选的结构化告警，用于匹配 Runbook",
+    )
+    input: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=10_000,
+        description="可选故障描述；省略时使用兼容诊断任务",
+    )
+    strategy: Literal["auto", "simple", "enterprise"] = Field(
+        default="auto",
+        description="自动路由或强制诊断策略",
+    )
+    execute_remediation: bool = Field(
+        default=False,
+        description="是否允许生成并审批受控处置步骤",
     )
 
 
@@ -60,6 +71,10 @@ class EnterpriseAlert(BaseModel):
     severity: str = Field(default="unknown", min_length=1, max_length=32)
     started_at: datetime | None = None
     environment: str = Field(default="production", min_length=1, max_length=64)
+    affected_services: list[str] = Field(default_factory=list, max_length=32)
+    recent_change: bool = False
+    requires_graph_analysis: bool = False
+    requires_change_correlation: bool = False
 
 
 class EnterpriseIncidentRequest(BaseModel):
@@ -69,10 +84,13 @@ class EnterpriseIncidentRequest(BaseModel):
     alert: EnterpriseAlert
     incident_id: str | None = Field(default=None, min_length=1, max_length=128)
     trace_id: str | None = Field(default=None, min_length=1, max_length=128)
+    identity: AgentIdentity = Field(default_factory=default_agent_identity)
+    execute_remediation: bool = False
 
 
 class AlertInfo(BaseModel):
     """告警信息"""
+
     alertname: str
     severity: str
     instance: str

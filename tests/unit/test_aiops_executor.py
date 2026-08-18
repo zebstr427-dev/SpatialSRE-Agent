@@ -9,11 +9,10 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 import app.agent.aiops.executor as executor_module
 from app.agent.aiops.state import create_incident_state
-from app.agent.tool_gateway import ToolGateway
 from app.agent.identity import AgentIdentity, AgentRole
 from app.agent.policy import ToolPolicy, ToolPolicyEngine
-from app.agent.tool_risk import READ_ONLY_METADATA
-from app.agent.tool_risk import ToolRiskLevel, ToolRiskMetadata
+from app.agent.tool_gateway import ToolGateway
+from app.agent.tool_risk import READ_ONLY_METADATA, ToolRiskLevel, ToolRiskMetadata
 
 
 def _tool(name: str, coroutine) -> StructuredTool:

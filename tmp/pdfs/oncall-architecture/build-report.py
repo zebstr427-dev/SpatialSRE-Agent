@@ -72,7 +72,7 @@ class ArchitectureDocTemplate(BaseDocTemplate):
             bottomMargin=MARGIN_BOTTOM,
             title="SuperBizAgent Python 项目整体架构说明",
             author="Codex",
-            subject="P0-P3 改造验收后的系统结构、调用链、数据流和运行边界",
+            subject="单一 Durable Incident Runtime、双诊断策略与共享治理架构",
         )
 
         portrait_frame = Frame(
@@ -288,7 +288,7 @@ def build_story() -> list:
             para("SuperBizAgent Python 项目", "CoverTitleCJK"),
             para("整体架构、信息流与模块职责说明", "CoverTitleCJK"),
             Spacer(1, 8 * mm),
-            para("基于 P0-P3 改造完成后的当前代码", "CoverSubCJK"),
+            para("单一 Durable Incident Runtime 完成态架构", "CoverSubCJK"),
             Spacer(1, 28 * mm),
             Table(
                 [
@@ -323,7 +323,7 @@ def build_story() -> list:
     )
     story.append(
         para(
-            "系统同时提供三条业务路径：普通 AI 对话和知识问答、可以暂停与恢复的持久化 AIOps 诊断、按固定角色分工的企业多智能体事故分析。"
+            "系统提供两类入口：普通 AI 对话和知识问答保持独立；故障诊断统一进入 Durable Incident Runtime，由 Incident Router 在 Simple 与 Enterprise 两种策略之间选择。"
         )
     )
     story.append(
@@ -340,10 +340,10 @@ def build_story() -> list:
     story.append(para("阅读顺序", "H2CJK"))
     story.extend(
         [
-            bullet("先看系统总览，记住 FastAPI 是总入口，后面有三条主要业务路径。"),
+            bullet("先看系统总览，记住普通 RAG 独立，两个事故接口汇入同一个 AIOpsService。"),
             bullet("再看聊天与知识入库，理解普通问答和 Milvus 知识库的关系。"),
-            bullet("然后看持久化 AIOps，理解 Planner、Executor、审批与 PostgreSQL 恢复。"),
-            bullet("接着看企业工作流，理解多个角色如何按固定顺序协作。"),
+            bullet("然后看统一 Runtime，理解确定性路由、动态升级、审批与 PostgreSQL 恢复。"),
+            bullet("接着看 Enterprise 策略，理解多个角色如何并行调查并共享工具治理。"),
             bullet("最后看启动与存储边界，确认哪些数据会保留，哪些只存在内存。"),
         ]
     )
@@ -360,7 +360,7 @@ def build_story() -> list:
         template="landscape",
         title="二、整体结构图 - 系统总览",
         filename="01-system-overview.png",
-        caption="大白话理解：FastAPI 是总接待台。普通聊天、持久化 AIOps 和企业事故工作流是三个独立办事部门，它们共享模型、检索和外部工具，但保存状态的方式不同。",
+        caption="大白话理解：普通聊天是独立问答链路；所有故障请求进入同一个 AIOpsService。Router 选择 Simple 或 Enterprise，两种策略共享 IncidentState、Checkpoint、Gateway、审批和审计。",
     )
     diagram_page(
         story,
@@ -374,21 +374,21 @@ def build_story() -> list:
         template="portrait",
         title="子图二：持久化 AIOps 诊断",
         filename="03-durable-aiops.png",
-        caption="Planner 制定计划，Executor 逐步执行，Replanner 决定继续或生成报告。需要人工审批时，LangGraph 将当前状态写入 PostgreSQL 并暂停，审批后从同一事故检查点恢复。",
+        caption="Router 先依据显式策略与故障复杂度选路。Simple 证据不足时最多升级一次；Enterprise 复用公共 Executor 和 Approval。父图在每个节点后写入 PostgreSQL，重启后按 incident_id 恢复。",
     )
     diagram_page(
         story,
         template="portrait",
         title="子图三：企业多智能体事故分析",
         filename="04-enterprise-workflow.png",
-        caption="流程按固定角色推进：Triage -> RAG -> SRE/Change 并行 -> Root Cause -> Remediation -> Report。当前图数据和部分角色证据以进程内或演示数据为主。",
+        caption="Enterprise 是父图中的专业诊断策略：Triage -> RAG -> SRE/Change 并行 -> Root Cause -> Remediation -> Report。外部查询统一经过 Gateway；Provider 失败被隔离并形成 partial results，不生成替代事实。",
     )
     diagram_page(
         story,
         template="landscape",
         title="子图四：启动、存储与运行边界",
         filename="05-runtime-storage.png",
-        caption="应用启动依赖 Milvus 和 PostgreSQL。PostgreSQL 保存 AIOps 状态，Milvus 保存知识向量；Chat MemorySaver 和 NetworkX 只存在当前进程。当前没有 Redis、Kafka 或 RabbitMQ。",
+        caption="FastAPI lifespan 初始化 Milvus、PostgreSQL Saver、Incident Graph 快照与单一 AIOpsService。PostgreSQL 保存两种策略的统一状态；普通聊天的 MemorySaver 与浏览器历史保持独立。",
     )
 
     # Detailed explanation
@@ -405,25 +405,25 @@ def build_story() -> list:
             "主要模块：app/api/file.py、document_splitter_service.py、vector_embedding_service.py、vector_index_service.py、vector_store_manager.py。",
         ),
         (
-            "3. 持久化 AIOps",
-            "AIOps API -> Planner -> Executor -> Tool Gateway -> 证据 -> Replanner -> PostgreSQL 检查点 -> SSE 返回",
-            "需要审批时：Executor -> Approval Node -> PostgreSQL 暂存 -> 人工审批 -> Command resume -> Executor。incident_id 同时作为 LangGraph thread_id；trace_id 标识一次执行链。",
+            "3. 统一 Durable Incident Runtime",
+            "AIOps API -> Incident Router -> Simple 或 Enterprise -> 统一 IncidentState -> PostgreSQL -> SSE",
+            "显式策略覆盖自动路由；auto 对 critical、多服务、GraphRAG/变更关联和 high+recent_change 直接选择 Enterprise，其余先走 Simple。incident_id 同时作为 LangGraph thread_id。",
         ),
         (
-            "4. 企业多智能体分析",
-            "Enterprise API -> Triage -> RAG -> SRE 与 Change 并行 -> Root Cause -> Remediation -> Report",
-            "主要模块：app/agent/enterprise_workflow.py、app/retrieval/hybrid.py、app/incident_graph/、app/runbooks.py、app/change_intelligence.py。",
+            "4. Enterprise 诊断策略",
+            "Router -> Triage -> RAG -> SRE 与 Change 并行 -> Root Cause -> Remediation -> 公共 Executor/Approval（可选）-> Report",
+            "企业兼容入口强制 enterprise，但仍调用同一个 AIOpsService。Runbook、Hybrid RAG、Incident Graph、MCP Provider 和处置工具都受统一审计边界约束。",
         ),
         (
             "5. 应用启动",
-            "app.run -> Uvicorn -> FastAPI lifespan -> 连接 Milvus -> 连接 PostgreSQL -> 初始化工作流 -> 开放接口",
-            "Milvus 或 PostgreSQL 连接失败都会影响当前应用初始化。",
+            "app.run -> Uvicorn -> FastAPI lifespan -> Milvus / PostgreSQL -> Incident Graph -> 单一 AIOpsService -> 开放接口",
+            "生命周期集中创建与释放连接池；EnterpriseIncidentWorkflow 只向父图注册节点，不持有独立生产运行链。",
         ),
     ]
     for title, chain, detail in chains:
         story.append(KeepTogether([para(title, "H2CJK"), para(chain, "CalloutCJK"), para(detail)]))
 
-    story.extend([PageBreak(), para("四、三个业务路径的关键差异", "H1CJK")])
+    story.extend([PageBreak(), para("四、入口与诊断策略的关键差异", "H1CJK")])
     comparison_data = [
         [
             para("路径", "TableHeadCJK"),
@@ -432,8 +432,8 @@ def build_story() -> list:
             para("工具治理", "TableHeadCJK"),
         ],
         [para("普通聊天", "TableCellCJK"), para("问答、知识检索", "TableCellCJK"), para("MemorySaver + 浏览器 localStorage", "TableCellCJK"), para("工具直接绑定，不经过 Tool Gateway", "TableCellCJK")],
-        [para("持久化 AIOps", "TableCellCJK"), para("生产式告警诊断与审批", "TableCellCJK"), para("PostgreSQL LangGraph 检查点", "TableCellCJK"), para("身份、风险、策略、dry-run、审批、审计", "TableCellCJK")],
-        [para("企业工作流", "TableCellCJK"), para("结构化多角色事故分析", "TableCellCJK"), para("单次运行状态 + NetworkX 内存图", "TableCellCJK"), para("证据 Guardrail；不是持久化审批流", "TableCellCJK")],
+        [para("Simple 策略", "TableCellCJK"), para("低成本、逐步诊断", "TableCellCJK"), para("统一 IncidentState + PostgreSQL", "TableCellCJK"), para("Gateway、身份、策略、审批、审计", "TableCellCJK")],
+        [para("Enterprise 策略", "TableCellCJK"), para("跨日志、指标、变更和图谱的多角色分析", "TableCellCJK"), para("统一 IncidentState + PostgreSQL", "TableCellCJK"), para("同一 Gateway；Provider 失败隔离", "TableCellCJK")],
     ]
     story.append(
         Table(
@@ -457,9 +457,9 @@ def build_story() -> list:
     story.append(Spacer(1, 4 * mm))
     story.extend(
         [
-            bullet("要长期保存和恢复事故进度，应走持久化 AIOps，而不是普通聊天。"),
-            bullet("需要固定角色、固定报告结构和可重复评测时，企业工作流更合适。"),
-            bullet("普通聊天适合快速问答，但当前工具治理强度低于持久化 AIOps。"),
+            bullet("普通聊天用于知识问答；需要持久化、审批或审计的故障请求统一进入 AIOpsService。"),
+            bullet("Simple 优先控制成本，证据不足时由父图动态升级，已采集证据不会丢失。"),
+            bullet("Enterprise 负责复杂故障的专业分工，并与 Simple 共享执行和安全底座。"),
         ]
     )
 
@@ -470,13 +470,13 @@ def build_story() -> list:
         ("Web 前端", "聊天、上传、AIOps 触发和本地历史", "static/index.html；static/app.js", "Fetch；SSE；localStorage"),
         ("Chat API", "普通和流式对话、会话查询与清理", "app/api/chat.py", "RagAgentService"),
         ("文件 API", "上传文档、触发单文件或目录索引", "app/api/file.py", "VectorIndexService"),
-        ("AIOps API", "诊断、状态查询、审批、企业事故入口", "app/api/aiops.py", "AIOpsService；EnterpriseWorkflow"),
+        ("AIOps API", "统一诊断、状态查询、审批与企业兼容入口", "app/api/aiops.py", "AIOpsService"),
         ("Chat Agent", "调用模型和工具完成普通问答", "app/services/rag_agent_service.py", "Qwen；MemorySaver；MCP"),
-        ("持久化 AIOps", "编排计划、执行、审批和重新规划", "app/services/aiops_service.py", "LangGraph；PostgreSQL"),
-        ("AIOps 节点", "实现 Planner、Executor、Replanner", "app/agent/aiops/", "Qwen；Tool Gateway"),
+        ("Durable Runtime", "编译单一父图并编排双策略、审批和恢复", "app/services/aiops_service.py", "LangGraph；PostgreSQL"),
+        ("AIOps 节点", "Router、Planner、Executor、Replanner、Evidence Assessor", "app/agent/aiops/", "Qwen；Tool Gateway"),
         ("Tool Gateway", "工具注册、风控、审批、超时和审计", "app/agent/tool_gateway.py", "Policy；Identity；Risk"),
         ("证据治理", "统一证据结构、引用和输入检查", "app/agent/evidence.py", "IncidentState"),
-        ("企业工作流", "结构化多角色事故分析", "app/agent/enterprise_workflow.py", "Hybrid RAG；GraphRAG"),
+        ("Enterprise 节点", "向统一父图注册多角色诊断节点", "app/agent/enterprise_workflow.py", "Gateway；Hybrid RAG；GraphRAG"),
         ("知识检索", "向量、关键词和融合检索", "vector_search_service.py；app/retrieval/hybrid.py", "Milvus；文档集合"),
         ("Incident Graph", "服务、事故、变更关系存储和查询", "app/incident_graph/", "NetworkX"),
         ("Runbook", "加载和匹配标准处置流程", "app/runbooks.py", "YAML；JSON"),
@@ -510,33 +510,33 @@ def build_story() -> list:
     story.extend([NextPageTemplate("portrait"), PageBreak(), para("六、架构说明", "H1CJK")])
     story.append(
         para(
-            "分层说明：本项目不是严格的 Controller -> Service -> Repository 架构。app/api 相当于 Controller；app/services 与 app/agent 共同承担业务层；checkpoint.py、milvus_client.py 和 vector_store_manager.py 相当于数据访问层；当前没有统一 Repository 接口。",
+            "分层说明：app/api 负责协议适配；AIOpsService 持有唯一事故父图；app/agent 提供策略节点；Tool Gateway 形成外部副作用边界；checkpoint.py 与向量服务承担持久化和数据访问。依赖始终由接入层指向运行时、策略和基础设施。",
             "CalloutCJK",
         )
     )
     sections = [
-        ("模块划分原则", "系统主要按使用场景划分。普通聊天、持久化 AIOps 和企业事故分析拥有独立的状态与编排方式，而不是强制共享一套工作流。"),
+        ("模块划分原则", "普通聊天按问答场景独立；故障处理按单一 Runtime 划分。Simple 与 Enterprise 是同一父图中的可路由策略，不是两套服务。"),
         ("核心依赖方向", "正常方向为：浏览器或 API -> 路由 -> Service/Workflow -> 工具与检索 -> 数据库或外部系统。API 层主要负责参数接收、依赖获取、错误转换和流式返回。"),
-        ("关键数据流", "聊天消息保存在浏览器 localStorage 与后端 MemorySaver；知识文档进入 Milvus；AIOps IncidentState 按 incident_id 写入 PostgreSQL；企业事故状态主要在一次工作流运行中传递。"),
+        ("关键数据流", "聊天消息保存在 localStorage 与 MemorySaver；知识文档进入 Milvus；所有故障状态、路由历史、证据、审批与 Agent 输出按 incident_id 写入 PostgreSQL。"),
         ("系统边界", "项目内部负责 AI 编排、状态、检索和工具治理。Qwen、MCP、Prometheus、PostgreSQL、Milvus 属于外部运行依赖。系统没有 Redis、Kafka、RabbitMQ 等缓存或消息队列。"),
     ]
     for title, text in sections:
         story.append(para(title, "H2CJK"))
         story.append(para(text))
 
-    story.append(para("高耦合或重点关注项", "H2CJK"))
+    story.append(para("解耦边界与设计取舍", "H2CJK"))
     story.extend(
         [
-            bullet("RagAgentService 直接绑定工具，绕过 Tool Gateway 的身份、风险、审批和审计控制。"),
-            bullet("普通聊天同时依赖浏览器历史与后端 MemorySaver，两份状态可能出现不一致。"),
-            bullet("VectorStoreManager 的全局实例可能在模块导入阶段连接 Milvus，增加启动和测试耦合。"),
-            bullet("企业工作流默认 GraphRAG 数据、角色证据和 NetworkX 图带有演示性质。"),
-            bullet("前端没有人工审批界面，也没有企业事故工作流入口。"),
-            bullet("AIOps 的持久化依赖 PostgreSQL，但现有 Windows 启动脚本和 Makefile 没有统一启动 PostgreSQL Compose。"),
+            bullet("AIOpsService 是唯一事故编排所有者；EnterpriseIncidentWorkflow 只提供节点，避免双图状态漂移。"),
+            bullet("Gateway 通过 factory 创建请求级实例，策略注册共享、audit hook 隔离，避免并发事故串审计。"),
+            bullet("SRE、Change 与 RAG 的外部查询统一经过 Gateway；Provider 失败写入状态而不伪造证据。"),
+            bullet("普通聊天保留轻量工具链，不承担生产故障执行；这一边界通过独立 API 和状态存储体现。"),
+            bullet("restart_service 被定义为 write 风险；production 需要审批且执行层强制 dry_run。"),
+            bullet("旧 planner/executor/replanner/approval 节点名保留，v1 Checkpoint 可按原 next node 恢复。"),
         ]
     )
 
-    story.append(para("七、依据与不确定项", "H1CJK"))
+    story.append(para("七、依据与运行边界", "H1CJK"))
     story.append(para("关键代码依据", "H2CJK"))
     references = [
         "app/main.py：应用生命周期、路由与服务初始化。",
@@ -547,23 +547,23 @@ def build_story() -> list:
         "app/services/rag_agent_service.py：普通聊天、MemorySaver 和工具绑定。",
         "app/core/checkpoint.py：PostgreSQL LangGraph 检查点。",
         "static/app.js：前端请求、SSE 和 localStorage。",
-        "docs/learning/README.md：P0-P3 能力和验收索引。",
+        "docs/learning/README.md：能力课程和验收索引。",
     ]
     story.extend([bullet(item) for item in references])
 
-    story.append(para("待确认事项", "H2CJK"))
+    story.append(para("运行边界声明", "H2CJK"))
     uncertainties = [
-        "待确认：生产部署拓扑。仓库中的本地启动和 Compose 文件不足以证明使用 Kubernetes、虚拟机或特定云平台。",
-        "待确认：生产 MCP 服务的真实能力。代码能确认协议和地址，不能确认外部服务返回的日志范围、监控范围与权限。",
-        "待确认：OpenTelemetry 数据发送位置。已有 Span 埋点，但没有发现 exporter、collector 或观测平台配置。",
-        "待确认：PostgreSQL 的生产备份与高可用策略。当前代码只负责连接池和检查点读写。",
-        "待确认：人工审批的真实操作入口。后端 API 已存在，但网页端没有审批页面。",
+        "仓库交付本地与 Docker Compose 运行方式，不绑定 Kubernetes、虚拟机或特定云厂商。",
+        "MCP 服务是协议适配器；日志、指标与变更的权限范围由部署环境配置。",
+        "Incident Graph 快照带 source=sample provenance，报告能够区分样例来源与真实 Provider 证据。",
+        "OpenTelemetry 与 AgentOps 记录 span、成本和角色状态；Exporter 由部署环境注入。",
+        "PostgreSQL 负责 LangGraph 检查点；备份、高可用和灾备属于数据库基础设施职责。",
     ]
     story.extend([bullet(item) for item in uncertainties])
 
     story.append(
         para(
-            "验证记录：非 PostgreSQL 测试套件为 115 passed，代码覆盖率 64.18%。PostgreSQL 持久化集成测试仍需要实际数据库环境完成独立验证。",
+            "验证记录：Python 3.13.15 下全量 pytest 132 passed，代码覆盖率 66.42%；PostgreSQL 18.6 集成测试覆盖连接池重建、事故隔离和中断后不重复节点恢复。",
             "CalloutCJK",
         )
     )
