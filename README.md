@@ -259,7 +259,7 @@ uv run pyright app
 - Ruff：`0 errors`
 - Pyright：`0 errors`
 
-架构原理、测试证据和可复现操作见 [学习与验收文档](docs/learning/README.md)；统一 Runtime 的设计说明见 [Durable Incident Runtime](docs/learning/31-unified-durable-incident-runtime.md)。
+架构原理、测试证据和可复现操作见 [学习与验收文档](docs/learning/README.md)；统一 Runtime 的设计说明见 [Durable Incident Runtime](docs/learning/31-unified-durable-incident-runtime.md)；从业务入口、自动路由、动态升级到审批恢复的完整学习路径见 [项目详解易懂增强版](output/pdf/super-biz-agent-project-guide.pdf)。
 
 ## 主要配置
 
